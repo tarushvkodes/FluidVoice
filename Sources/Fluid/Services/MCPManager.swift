@@ -397,8 +397,10 @@ final class MCPManager {
                     .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
 
-            for line in lines {
-                DebugLogger.shared.debug("MCP[\(serverID)] stderr: \(line)", source: "MCPManager")
+            Task { @MainActor in
+                for line in lines {
+                    DebugLogger.shared.debug("MCP[\(serverID)] stderr: \(line)", source: "MCPManager")
+                }
             }
         }
 
@@ -739,26 +741,78 @@ final class MCPManager {
         }
     }
 
-    private func withTimeout<T>(
+    private final class TimeoutState: @unchecked Sendable {
+        private let lock = NSLock()
+        private nonisolated(unsafe) var didResume = false
+        private nonisolated(unsafe) var operationTask: Task<Void, Never>?
+        private nonisolated(unsafe) var timeoutTask: Task<Void, Never>?
+
+        nonisolated func setTasks(
+            operationTask: Task<Void, Never>,
+            timeoutTask: Task<Void, Never>
+        ) {
+            self.lock.lock()
+            if self.didResume {
+                self.lock.unlock()
+                operationTask.cancel()
+                timeoutTask.cancel()
+                return
+            }
+            self.operationTask = operationTask
+            self.timeoutTask = timeoutTask
+            self.lock.unlock()
+        }
+
+        nonisolated func finish(_ resume: () -> Void) {
+            self.lock.lock()
+            guard !self.didResume else {
+                self.lock.unlock()
+                return
+            }
+
+            self.didResume = true
+            let operationTask = self.operationTask
+            let timeoutTask = self.timeoutTask
+            self.operationTask = nil
+            self.timeoutTask = nil
+            self.lock.unlock()
+
+            operationTask?.cancel()
+            timeoutTask?.cancel()
+            resume()
+        }
+    }
+
+    private func withTimeout<T: Sendable>(
         seconds: TimeInterval, operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let timeoutNanoseconds = UInt64(max(1, Int(seconds.rounded())) * 1_000_000_000)
+        let state = TimeoutState()
 
-        return try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
+        return try await withUnsafeThrowingContinuation { continuation in
+            let operationTask = Task.detached(priority: .userInitiated) {
+                do {
+                    let result = try await operation()
+                    state.finish {
+                        continuation.resume(returning: result)
+                    }
+                } catch {
+                    state.finish {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
 
-            group.addTask {
-                try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                throw MCPManagerError.timeout(seconds)
+            let timeoutTask = Task.detached(priority: .userInitiated) {
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                    state.finish {
+                        continuation.resume(throwing: MCPManagerError.timeout(seconds))
+                    }
+                } catch {}
             }
 
-            guard let first = try await group.next() else {
-                throw MCPManagerError.timeout(seconds)
-            }
-            group.cancelAll()
-            return first
+            state.setTasks(operationTask: operationTask, timeoutTask: timeoutTask)
         }
     }
 
