@@ -10,7 +10,7 @@ final class SystemNotificationService: NSObject, UNUserNotificationCenterDelegat
 
     private let notificationCenter: UNUserNotificationCenter
 
-    private override init() {
+    override private init() {
         self.notificationCenter = UNUserNotificationCenter.current()
         super.init()
         self.notificationCenter.delegate = self

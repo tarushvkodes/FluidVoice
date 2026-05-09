@@ -22,16 +22,16 @@ final class TerminalService {
             "type": "function",
             "name": "execute_terminal_command",
             "description": """
-                Execute a terminal/shell command on the user's macOS computer.
-                Use this for file operations (ls, cat, mkdir, rm), git commands, brew, npm, python, or any CLI tool.
+            Execute a terminal/shell command on the user's macOS computer.
+            Use this for file operations (ls, cat, mkdir, rm), git commands, brew, npm, python, or any CLI tool.
 
-                IMPORTANT: Follow the agentic workflow:
-                1. ALWAYS check prerequisites first (file exists, command available)
-                2. Execute the main action
-                3. Verify the result
+            IMPORTANT: Follow the agentic workflow:
+            1. ALWAYS check prerequisites first (file exists, command available)
+            2. Execute the main action
+            3. Verify the result
 
-                Returns JSON with: success (bool), output (stdout), error (stderr), exitCode, purpose.
-                """,
+            Returns JSON with: success (bool), output (stdout), error (stderr), exitCode, purpose.
+            """,
             "parameters": [
                 "type": "object",
                 "properties": [
@@ -46,12 +46,12 @@ final class TerminalService {
                     "purpose": [
                         "type": "string",
                         "description": """
-                            Brief description of why this command is being run. Must be one of:
-                            - 'checking' (verifying prerequisites)
-                            - 'executing' (main action)
-                            - 'verifying' (confirming result)
-                            Example: 'Checking if config.json exists'
-                            """,
+                        Brief description of why this command is being run. Must be one of:
+                        - 'checking' (verifying prerequisites)
+                        - 'executing' (main action)
+                        - 'verifying' (confirming result)
+                        Example: 'Checking if config.json exists'
+                        """,
                     ],
                 ],
                 "required": ["command", "purpose"],

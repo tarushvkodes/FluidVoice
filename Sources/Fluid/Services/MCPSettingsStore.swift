@@ -22,9 +22,13 @@ actor MCPSettingsStore {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
 
-            let mcpServers =
-                try container.decodeIfPresent([String: Server].self, forKey: .mcpServers) ?? [:]
-            self.servers = mcpServers.keys.sorted().compactMap { mcpServers[$0] }
+            if container.contains(.mcpServers) {
+                let mcpServers =
+                    try container.decodeIfPresent([String: Server].self, forKey: .mcpServers) ?? [:]
+                self.servers = mcpServers.keys.sorted().compactMap { mcpServers[$0] }
+            } else {
+                self.servers = try container.decodeIfPresent([Server].self, forKey: .servers) ?? []
+            }
         }
     }
 
@@ -126,7 +130,7 @@ actor MCPSettingsStore {
                         forKey: .type,
                         in: container,
                         debugDescription:
-                            "Unsupported MCP server type '\(type)'. Supported values are 'stdio' and 'http'."
+                        "Unsupported MCP server type '\(type)'. Supported values are 'stdio' and 'http'."
                     )
                 }
             } else if try container.decodeIfPresent(String.self, forKey: .url) != nil {
@@ -162,9 +166,9 @@ actor MCPSettingsStore {
             switch self {
             case .applicationSupportUnavailable:
                 return "Could not access Application Support directory for MCP settings."
-            case .invalidJSON(let details):
+            case let .invalidJSON(details):
                 return "Invalid MCP settings.json: \(details)"
-            case .invalidConfiguration(let details):
+            case let .invalidConfiguration(details):
                 return "Invalid MCP settings configuration: \(details)"
             }
         }
@@ -186,7 +190,8 @@ actor MCPSettingsStore {
             throw StoreError.applicationSupportUnavailable
         }
         let directory = baseDirectory.appendingPathComponent(
-            self.appSupportFolder, isDirectory: true)
+            self.appSupportFolder, isDirectory: true
+        )
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent(self.fileName, isDirectory: false)
     }
@@ -197,7 +202,8 @@ actor MCPSettingsStore {
         guard !FileManager.default.fileExists(atPath: fileURL.path) else { return fileURL }
 
         if let bundledURL = Bundle.main.url(
-            forResource: self.bundledTemplateName, withExtension: "json"),
+            forResource: self.bundledTemplateName, withExtension: "json"
+        ),
             let data = try? Data(contentsOf: bundledURL)
         {
             try data.write(to: fileURL, options: .atomic)
@@ -240,9 +246,9 @@ actor MCPSettingsStore {
         let modifiedAt = self.modifiedDate(for: fileURL)
 
         if !forceReload,
-            let cachedSettings,
-            cachedSettings.fileURL == fileURL,
-            cachedSettings.modifiedAt == modifiedAt
+           let cachedSettings,
+           cachedSettings.fileURL == fileURL,
+           cachedSettings.modifiedAt == modifiedAt
         {
             return cachedSettings
         }
@@ -286,7 +292,7 @@ actor MCPSettingsStore {
             server.id = id
 
             if let name = server.name?.trimmingCharacters(in: .whitespacesAndNewlines),
-                !name.isEmpty
+               !name.isEmpty
             {
                 server.name = name
             } else {
@@ -307,7 +313,7 @@ actor MCPSettingsStore {
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty }
                 if let cwd = server.cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
-                    !cwd.isEmpty
+                   !cwd.isEmpty
                 {
                     server.cwd = cwd
                 } else {
@@ -318,8 +324,8 @@ actor MCPSettingsStore {
             case .http:
                 let urlString = server.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard let url = URL(string: urlString),
-                    let scheme = url.scheme?.lowercased(),
-                    scheme == "http" || scheme == "https"
+                      let scheme = url.scheme?.lowercased(),
+                      scheme == "http" || scheme == "https"
                 else {
                     throw StoreError.invalidConfiguration(
                         "Server '\(id)' (http) requires a valid http(s) 'url'.")
@@ -352,7 +358,7 @@ actor MCPSettingsStore {
 
     private func modifiedDate(for fileURL: URL) -> Date {
         if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
-            let modified = attrs[.modificationDate] as? Date
+           let modified = attrs[.modificationDate] as? Date
         {
             return modified
         }

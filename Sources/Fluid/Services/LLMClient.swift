@@ -314,7 +314,7 @@ final class LLMClient {
                 } else {
                     return try await self.processNonStreaming(request: currentRequest.request, format: currentRequest.format)
                 }
-            } catch LLMError.httpError(let code, let message)
+            } catch let LLMError.httpError(code, message)
                 where !attemptedResponsesFallback &&
                 currentRequest.format == .responses &&
                 routePlan.fallbackFormat != nil &&
@@ -327,6 +327,7 @@ final class LLMClient {
                 )
                 guard let fallbackFormat = routePlan.fallbackFormat else { continue }
                 currentRequest = try self.buildRequest(config, forcedFormat: fallbackFormat)
+                currentRequest.request.timeoutInterval = config.timeoutSeconds ?? Self.defaultTimeoutSeconds
                 continue
             } catch let error as URLError where self.isRetryableError(error) {
                 lastError = error
@@ -859,6 +860,17 @@ final class LLMClient {
         }
 
         if format == .responses {
+            if let choices = json["choices"] as? [[String: Any]],
+               let choice = choices.first,
+               let message = choice["message"] as? [String: Any]
+            {
+                return self.parseMessageResponse(message)
+            }
+
+            guard json["output"] != nil || json["output_text"] != nil else {
+                throw LLMError.invalidResponse
+            }
+
             return self.parseResponsesResponse(json)
         }
 
@@ -1063,106 +1075,111 @@ final class LLMClient {
             if isResponses {
                 let eventType = json["type"] as? String ?? ""
 
-                switch eventType {
-                case "response.output_text.delta":
-                    if let delta = json["delta"] as? String {
-                        sawOutputTextDelta = true
-                        processContentChunk(delta)
-                    }
-
-                case "response.output_text.done":
-                    if !sawOutputTextDelta, let text = json["text"] as? String {
-                        processContentChunk(text)
-                    }
-
-                case "response.function_call_arguments.delta", "response.function_call_arguments.done":
-                    let outputIndex = json["output_index"] as? Int
-                    let accumulatorKey: String
-                    if let itemID = json["item_id"] as? String {
-                        accumulatorKey = itemID
-                        if let outputIndex {
-                            responsesOutputIndexToAccumulatorKey[outputIndex] = itemID
+                if eventType.isEmpty, json["choices"] != nil {
+                    // Some chat-only providers answer a Responses-shaped request with
+                    // chat-completions SSE. Let the shared chat parser below handle it.
+                } else {
+                    switch eventType {
+                    case "response.output_text.delta":
+                        if let delta = json["delta"] as? String {
+                            sawOutputTextDelta = true
+                            processContentChunk(delta)
                         }
-                    } else if let outputIndex,
-                              let knownKey = responsesOutputIndexToAccumulatorKey[outputIndex]
-                    {
-                        accumulatorKey = knownKey
-                    } else {
-                        accumulatorKey = "index_\(outputIndex ?? 0)"
-                    }
 
-                    var accumulator = toolCallAccumulators[accumulatorKey] ?? StreamingToolAccumulator()
+                    case "response.output_text.done":
+                        if !sawOutputTextDelta, let text = json["text"] as? String {
+                            processContentChunk(text)
+                        }
 
-                    if let delta = json["delta"] as? String {
-                        accumulator.arguments += delta
-                    }
-                    if let arguments = json["arguments"] as? String {
-                        accumulator.arguments = arguments
-                    }
-
-                    toolCallAccumulators[accumulatorKey] = accumulator
-
-                case "response.output_item.added", "response.output_item.done":
-                    guard let item = json["item"] as? [String: Any] else { continue }
-
-                    if (item["type"] as? String) == "function_call" {
+                    case "response.function_call_arguments.delta", "response.function_call_arguments.done":
                         let outputIndex = json["output_index"] as? Int
-                        let fallbackIndexKey = "index_\(outputIndex ?? 0)"
-                        let accumulatorKey =
-                            item["id"] as? String ?? json["item_id"] as? String
-                            ?? (outputIndex.map { "index_\($0)" })
-                            ?? item["call_id"] as? String
-                            ?? "call_\(UUID().uuidString.prefix(8))"
-                        let callID = item["call_id"] as? String ?? accumulatorKey
-
-                        if let outputIndex {
-                            responsesOutputIndexToAccumulatorKey[outputIndex] = accumulatorKey
-                        }
-
-                        if accumulatorKey != fallbackIndexKey,
-                           toolCallAccumulators[accumulatorKey] == nil,
-                           let existingAccumulator = toolCallAccumulators.removeValue(forKey: fallbackIndexKey)
-                        {
-                            toolCallAccumulators[accumulatorKey] = existingAccumulator
-                        }
-
-                        var accumulator =
-                            toolCallAccumulators[accumulatorKey] ?? StreamingToolAccumulator()
-                        accumulator.id = callID
-                        if let name = item["name"] as? String {
-                            if accumulator.name == nil {
-                                config.onToolCallStart?(name)
+                        let accumulatorKey: String
+                        if let itemID = json["item_id"] as? String {
+                            accumulatorKey = itemID
+                            if let outputIndex {
+                                responsesOutputIndexToAccumulatorKey[outputIndex] = itemID
                             }
-                            accumulator.name = name
+                        } else if let outputIndex,
+                                  let knownKey = responsesOutputIndexToAccumulatorKey[outputIndex]
+                        {
+                            accumulatorKey = knownKey
+                        } else {
+                            accumulatorKey = "index_\(outputIndex ?? 0)"
                         }
-                        if let arguments = item["arguments"] as? String {
+
+                        var accumulator = toolCallAccumulators[accumulatorKey] ?? StreamingToolAccumulator()
+
+                        if let delta = json["delta"] as? String {
+                            accumulator.arguments += delta
+                        }
+                        if let arguments = json["arguments"] as? String {
                             accumulator.arguments = arguments
                         }
+
                         toolCallAccumulators[accumulatorKey] = accumulator
-                    } else if (item["type"] as? String) == "reasoning" {
-                        if let summary = item["summary"] as? String, !summary.isEmpty {
-                            processReasoningChunk(summary)
-                        } else if let summaryItems = item["summary"] as? [[String: Any]] {
-                            for summaryItem in summaryItems {
-                                if let text = summaryItem["text"] as? String, !text.isEmpty {
-                                    processReasoningChunk(text)
+
+                    case "response.output_item.added", "response.output_item.done":
+                        guard let item = json["item"] as? [String: Any] else { continue }
+
+                        if (item["type"] as? String) == "function_call" {
+                            let outputIndex = json["output_index"] as? Int
+                            let fallbackIndexKey = "index_\(outputIndex ?? 0)"
+                            let accumulatorKey =
+                                item["id"] as? String ?? json["item_id"] as? String
+                                    ?? (outputIndex.map { "index_\($0)" })
+                                    ?? item["call_id"] as? String
+                                    ?? "call_\(UUID().uuidString.prefix(8))"
+                            let callID = item["call_id"] as? String ?? accumulatorKey
+
+                            if let outputIndex {
+                                responsesOutputIndexToAccumulatorKey[outputIndex] = accumulatorKey
+                            }
+
+                            if accumulatorKey != fallbackIndexKey,
+                               toolCallAccumulators[accumulatorKey] == nil,
+                               let existingAccumulator = toolCallAccumulators.removeValue(forKey: fallbackIndexKey)
+                            {
+                                toolCallAccumulators[accumulatorKey] = existingAccumulator
+                            }
+
+                            var accumulator =
+                                toolCallAccumulators[accumulatorKey] ?? StreamingToolAccumulator()
+                            accumulator.id = callID
+                            if let name = item["name"] as? String {
+                                if accumulator.name == nil {
+                                    config.onToolCallStart?(name)
+                                }
+                                accumulator.name = name
+                            }
+                            if let arguments = item["arguments"] as? String {
+                                accumulator.arguments = arguments
+                            }
+                            toolCallAccumulators[accumulatorKey] = accumulator
+                        } else if (item["type"] as? String) == "reasoning" {
+                            if let summary = item["summary"] as? String, !summary.isEmpty {
+                                processReasoningChunk(summary)
+                            } else if let summaryItems = item["summary"] as? [[String: Any]] {
+                                for summaryItem in summaryItems {
+                                    if let text = summaryItem["text"] as? String, !text.isEmpty {
+                                        processReasoningChunk(text)
+                                    }
                                 }
                             }
                         }
+
+                    default:
+                        if eventType.contains("reasoning") {
+                            if let delta = json["delta"] as? String, !delta.isEmpty {
+                                processReasoningChunk(delta)
+                            }
+                            if let text = json["text"] as? String, !text.isEmpty {
+                                processReasoningChunk(text)
+                            }
+                        }
                     }
 
-                default:
-                    if eventType.contains("reasoning") {
-                        if let delta = json["delta"] as? String, !delta.isEmpty {
-                            processReasoningChunk(delta)
-                        }
-                        if let text = json["text"] as? String, !text.isEmpty {
-                            processReasoningChunk(text)
-                        }
-                    }
+                    continue
                 }
-
-                continue
             }
 
             guard let choices = json["choices"] as? [[String: Any]],

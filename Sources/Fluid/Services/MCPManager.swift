@@ -2,9 +2,9 @@ import Foundation
 import MCP
 
 #if canImport(System)
-    import System
+import System
 #else
-    import SystemPackage
+import SystemPackage
 #endif
 
 @MainActor
@@ -80,17 +80,17 @@ final class MCPManager {
 
         var errorDescription: String? {
             switch self {
-            case .invalidURL(let url):
+            case let .invalidURL(url):
                 return "Invalid MCP server URL: \(url)"
-            case .missingCommand(let serverID):
+            case let .missingCommand(serverID):
                 return "MCP server '\(serverID)' requires a command"
-            case .unknownTool(let name):
+            case let .unknownTool(name):
                 return "Unknown MCP tool '\(name)'"
-            case .unavailableServer(let serverID):
+            case let .unavailableServer(serverID):
                 return "MCP server '\(serverID)' is unavailable"
-            case .invalidArguments(let details):
+            case let .invalidArguments(details):
                 return "Invalid MCP tool arguments: \(details)"
-            case .timeout(let seconds):
+            case let .timeout(seconds):
                 return "MCP operation timed out after \(Int(seconds))s"
             }
         }
@@ -115,14 +115,14 @@ final class MCPManager {
             self.settingsFileURLCache = loaded.fileURL
 
             if !force,
-                let lastModifiedAt = self.lastModifiedAt,
-                lastModifiedAt == loaded.modifiedAt
+               let lastModifiedAt = self.lastModifiedAt,
+               lastModifiedAt == loaded.modifiedAt
             {
                 return
             }
 
             self.lastModifiedAt = loaded.modifiedAt
-            await self.applyConfiguration(loaded.document)
+            await self.applyConfiguration(loaded.document, forceReconnect: force)
 
         } catch {
             self.lastError = error.localizedDescription
@@ -133,7 +133,8 @@ final class MCPManager {
             await self.disconnectAllServers()
             DebugLogger.shared.error(
                 "MCPManager: Failed loading settings.json: \(error.localizedDescription)",
-                source: "MCPManager")
+                source: "MCPManager"
+            )
         }
     }
 
@@ -253,7 +254,10 @@ final class MCPManager {
         )
     }
 
-    private func applyConfiguration(_ document: MCPSettingsStore.SettingsDocument) async {
+    private func applyConfiguration(
+        _ document: MCPSettingsStore.SettingsDocument,
+        forceReconnect: Bool
+    ) async {
         self.lastError = nil
         self.connectionErrors = [:]
 
@@ -270,7 +274,7 @@ final class MCPManager {
 
         // Connect or refresh enabled servers.
         for server in enabledServers {
-            if let runtime = self.runtimes[server.id], runtime.config == server {
+            if !forceReconnect, let runtime = self.runtimes[server.id], runtime.config == server {
                 continue
             }
 
@@ -282,7 +286,8 @@ final class MCPManager {
                 self.connectionErrors[server.id] = error.localizedDescription
                 DebugLogger.shared.error(
                     "MCPManager: Failed connecting server '\(server.id)': \(error.localizedDescription)",
-                    source: "MCPManager")
+                    source: "MCPManager"
+                )
             }
         }
 
@@ -313,8 +318,7 @@ final class MCPManager {
         }
     }
 
-    private func connectHTTPServer(_ server: MCPSettingsStore.Server) async throws -> ServerRuntime
-    {
+    private func connectHTTPServer(_ server: MCPSettingsStore.Server) async throws -> ServerRuntime {
         guard let urlString = server.url, let endpoint = URL(string: urlString) else {
             throw MCPManagerError.invalidURL(server.url ?? "")
         }
@@ -345,7 +349,8 @@ final class MCPManager {
 
         DebugLogger.shared.info(
             "MCPManager: Connected HTTP MCP server '\(server.id)' with \(tools.count) tools",
-            source: "MCPManager")
+            source: "MCPManager"
+        )
 
         return ServerRuntime(
             config: server,
@@ -354,10 +359,9 @@ final class MCPManager {
         )
     }
 
-    private func connectStdioServer(_ server: MCPSettingsStore.Server) async throws -> ServerRuntime
-    {
+    private func connectStdioServer(_ server: MCPSettingsStore.Server) async throws -> ServerRuntime {
         guard let command = server.command?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !command.isEmpty
+              !command.isEmpty
         else {
             throw MCPManagerError.missingCommand(server.id)
         }
@@ -389,9 +393,9 @@ final class MCPManager {
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             let lines =
                 text
-                .split(whereSeparator: { $0.isNewline })
-                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+                    .split(whereSeparator: { $0.isNewline })
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
 
             for line in lines {
                 DebugLogger.shared.debug("MCP[\(serverID)] stderr: \(line)", source: "MCPManager")
@@ -424,7 +428,8 @@ final class MCPManager {
 
             DebugLogger.shared.info(
                 "MCPManager: Connected stdio MCP server '\(server.id)' with \(tools.count) tools",
-                source: "MCPManager")
+                source: "MCPManager"
+            )
 
             return ServerRuntime(
                 config: server,
@@ -491,7 +496,8 @@ final class MCPManager {
 
                 self.cachedToolDefinitions.append(definition)
                 self.toolRoutes[openAIName] = ToolRoute(
-                    serverID: serverID, originalToolName: tool.name)
+                    serverID: serverID, originalToolName: tool.name
+                )
             }
         }
     }
@@ -581,13 +587,16 @@ final class MCPManager {
         switch content {
         case let .text(text, _, _):
             return ToolExecutionContent(
-                type: "text", text: text, data: nil, mimeType: nil, uri: nil, metadata: [:])
+                type: "text", text: text, data: nil, mimeType: nil, uri: nil, metadata: [:]
+            )
         case let .image(data, mimeType, _, _):
             return ToolExecutionContent(
-                type: "image", text: nil, data: data, mimeType: mimeType, uri: nil, metadata: [:])
+                type: "image", text: nil, data: data, mimeType: mimeType, uri: nil, metadata: [:]
+            )
         case let .audio(data, mimeType, _, _):
             return ToolExecutionContent(
-                type: "audio", text: nil, data: data, mimeType: mimeType, uri: nil, metadata: [:])
+                type: "audio", text: nil, data: data, mimeType: mimeType, uri: nil, metadata: [:]
+            )
         case let .resource(resource, _, _):
             return ToolExecutionContent(
                 type: "resource",
@@ -643,13 +652,13 @@ final class MCPManager {
         switch value {
         case .null:
             return NSNull()
-        case .bool(let bool):
+        case let .bool(bool):
             return bool
-        case .int(let int):
+        case let .int(int):
             return int
-        case .double(let double):
+        case let .double(double):
             return double
-        case .string(let string):
+        case let .string(string):
             return string
         case let .data(mimeType, data):
             var payload: [String: Any] = [
@@ -660,9 +669,9 @@ final class MCPManager {
                 payload["mimeType"] = mimeType
             }
             return payload
-        case .array(let array):
+        case let .array(array):
             return array.map(Self.foundationValue(from:))
-        case .object(let object):
+        case let .object(object):
             var mapped: [String: Any] = [:]
             mapped.reserveCapacity(object.count)
             for (key, nestedValue) in object {
@@ -714,7 +723,7 @@ final class MCPManager {
             return .double(doubleValue)
 
         case let array as [Any]:
-            return .array(try array.map { try self.mcpValue(from: $0) })
+            return try .array(array.map { try self.mcpValue(from: $0) })
 
         case let dictionary as [String: Any]:
             var converted: [String: Value] = [:]

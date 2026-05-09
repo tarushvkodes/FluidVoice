@@ -95,11 +95,12 @@ struct ChatMessage: Codable, Identifiable, Equatable {
             let decodedCommand = try container.decodeIfPresent(String.self, forKey: .command)
             self.command = decodedCommand
             self.workingDirectory = try container.decodeIfPresent(
-                String.self, forKey: .workingDirectory)
+                String.self, forKey: .workingDirectory
+            )
             self.purpose = try container.decodeIfPresent(String.self, forKey: .purpose)
 
             if let name = try container.decodeIfPresent(String.self, forKey: .toolName),
-                !name.isEmpty
+               !name.isEmpty
             {
                 self.toolName = name
             } else if decodedCommand?.isEmpty == false {
@@ -109,7 +110,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
             }
 
             if let argsJSON = try container.decodeIfPresent(String.self, forKey: .argumentsJSON),
-                !argsJSON.isEmpty
+               !argsJSON.isEmpty
             {
                 self.argumentsJSON = argsJSON
             } else {
@@ -125,7 +126,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
                 }
 
                 if let data = try? JSONSerialization.data(
-                    withJSONObject: args, options: [.sortedKeys]),
+                    withJSONObject: args, options: [.sortedKeys]
+                ),
                     let jsonString = String(data: data, encoding: .utf8)
                 {
                     self.argumentsJSON = jsonString
@@ -175,12 +177,13 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         self.toolCall = try container.decodeIfPresent(ToolCall.self, forKey: .toolCall)
         self.stepType = try container.decodeIfPresent(StepType.self, forKey: .stepType) ?? .normal
         self.sourceToolCallID = try container.decodeIfPresent(
-            String.self, forKey: .sourceToolCallID)
+            String.self, forKey: .sourceToolCallID
+        )
         self.timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp) ?? Date()
 
         if let decodedRenderIntent = try container.decodeIfPresent(
-            RenderIntent.self, forKey: .renderIntent)
-        {
+            RenderIntent.self, forKey: .renderIntent
+        ) {
             self.renderIntent = decodedRenderIntent
         } else {
             self.renderIntent = Self.defaultRenderIntent(for: self.role, toolCall: self.toolCall)
@@ -336,7 +339,7 @@ final class ChatHistoryStore: ObservableObject {
     /// Update current chat with messages
     func updateCurrentChat(messages: [ChatMessage]) {
         guard let id = currentChatID,
-            let index = sessions.firstIndex(where: { $0.id == id })
+              let index = sessions.firstIndex(where: { $0.id == id })
         else { return }
 
         var session = self.sessions[index]
@@ -388,7 +391,7 @@ final class ChatHistoryStore: ObservableObject {
     /// Clear current chat (delete messages but keep session)
     func clearCurrentChat() {
         guard let id = currentChatID,
-            let index = sessions.firstIndex(where: { $0.id == id })
+              let index = sessions.firstIndex(where: { $0.id == id })
         else { return }
 
         self.sessions[index].messages = []
@@ -402,7 +405,7 @@ final class ChatHistoryStore: ObservableObject {
 
     private func loadSessions() {
         guard let data = defaults.data(forKey: Keys.chatSessions),
-            let decoded = try? JSONDecoder().decode([ChatSession].self, from: data)
+              let decoded = try? JSONDecoder().decode([ChatSession].self, from: data)
         else {
             self.sessions = []
             return

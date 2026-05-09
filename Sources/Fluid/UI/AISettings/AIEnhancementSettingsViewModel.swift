@@ -579,6 +579,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         // Build the endpoint URL
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let fullURL: String
+        let fallbackURL: String?
 
         if isAnthropic {
             // Anthropic uses /messages endpoint, not /chat/completions
@@ -587,122 +588,118 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             } else {
                 fullURL = endpoint + "/messages"
             }
-        } else if endpoint.contains("/responses") || endpoint.contains("/chat/completions") || endpoint.contains("/api/chat") || endpoint.contains("/api/generate") {
+            fallbackURL = nil
+        } else if endpoint.contains("/responses") {
             fullURL = endpoint
+            fallbackURL = endpoint.replacingOccurrences(
+                of: "/responses",
+                with: "/chat/completions"
+            )
+        } else if endpoint.contains("/chat/completions") || endpoint.contains("/api/chat") || endpoint.contains("/api/generate") {
+            fullURL = endpoint
+            fallbackURL = nil
         } else {
             fullURL = endpoint + "/responses"
+            fallbackURL = endpoint + "/chat/completions"
         }
 
         // Debug logging
         DebugLogger.shared.debug(
-            "testAPIConnection: provider=\(providerID), model=\(trimmedModel), baseURL=\(endpoint), fullURL=\(fullURL), isAnthropic=\(isAnthropic)",
+            "testAPIConnection: provider=\(providerID), model=\(trimmedModel), baseURL=\(endpoint), fullURL=\(fullURL), fallbackURL=\(fallbackURL ?? "none"), isAnthropic=\(isAnthropic)",
             source: "AISettingsView"
         )
 
-        guard let url = URL(string: fullURL) else {
-            await MainActor.run {
-                self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = "Invalid Base URL format: '\(endpoint)' could not be parsed as a URL"
-            }
-            return
-        }
-
-        // Build the request based on provider type
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
-
-        // Set authorization header (different for Anthropic)
-        if !apiKey.isEmpty {
-            if isAnthropic {
-                request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            } else {
-                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            }
-        }
-
-        // Build request body (different format for Anthropic)
-        let requestDict: [String: Any]
         let provKey = self.providerKey(for: providerID)
         let reasoningConfig = self.settings.getReasoningConfig(forModel: trimmedModel, provider: provKey)
-        let usesChatCompletions = fullURL.contains("/chat/completions") || fullURL.contains("/api/chat") || fullURL.contains("/api/generate")
 
-        if isAnthropic {
-            // Anthropic API format
-            requestDict = [
-                "model": trimmedModel,
-                "max_tokens": 10,
-                "messages": [["role": "user", "content": "Hi"]],
-            ]
-        } else if usesChatCompletions {
-            var dict: [String: Any] = [
-                "model": trimmedModel,
-                "messages": [["role": "user", "content": "test"]],
-            ]
-
-            let usesMaxCompletionTokens = self.settings.isReasoningModel(trimmedModel)
-            if usesMaxCompletionTokens {
-                dict["max_completion_tokens"] = 50
-            } else {
-                dict["max_tokens"] = 50
+        func attemptVerification(fullURL: String) async -> String? {
+            guard let url = URL(string: fullURL) else {
+                return "Invalid Base URL format: '\(fullURL)' could not be parsed as a URL"
             }
 
-            if let config = reasoningConfig, config.isEnabled {
-                if config.parameterName == "enable_thinking" {
-                    dict[config.parameterName] = config.parameterValue == "true"
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 15
+
+            if !apiKey.isEmpty {
+                if isAnthropic {
+                    request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                    request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
                 } else {
-                    dict[config.parameterName] = config.parameterValue
+                    request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
                 }
             }
 
-            requestDict = dict
-        } else {
-            var dict: [String: Any] = [
-                "model": trimmedModel,
-                "input": [["role": "user", "content": "test"]],
-                "max_output_tokens": 50,
-            ]
+            let requestDict: [String: Any]
+            let usesChatCompletions =
+                fullURL.contains("/chat/completions") ||
+                fullURL.contains("/api/chat") ||
+                fullURL.contains("/api/generate")
 
-            if let config = reasoningConfig, config.isEnabled {
-                if config.parameterName == "reasoning_effort" {
-                    dict["reasoning"] = ["effort": config.parameterValue]
-                } else if config.parameterName == "enable_thinking" {
-                    dict[config.parameterName] = config.parameterValue == "true"
+            if isAnthropic {
+                requestDict = [
+                    "model": trimmedModel,
+                    "max_tokens": 10,
+                    "messages": [["role": "user", "content": "Hi"]],
+                ]
+            } else if usesChatCompletions {
+                var dict: [String: Any] = [
+                    "model": trimmedModel,
+                    "messages": [["role": "user", "content": "test"]],
+                ]
+
+                let usesMaxCompletionTokens = self.settings.isReasoningModel(trimmedModel)
+                if usesMaxCompletionTokens {
+                    dict["max_completion_tokens"] = 50
                 } else {
-                    dict[config.parameterName] = config.parameterValue
+                    dict["max_tokens"] = 50
                 }
-            }
 
-            requestDict = dict
-        }
-
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: requestDict, options: []) else {
-            await MainActor.run {
-                self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = "Internal error: Failed to create test request payload"
-            }
-            return
-        }
-        request.httpBody = jsonData
-
-        // Make the request
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            if let httpResponse = response as? HTTPURLResponse {
-                let statusCode = httpResponse.statusCode
-
-                if statusCode >= 200, statusCode < 300 {
-                    await MainActor.run {
-                        self.updateConnectionStatus(.success, for: providerID)
-                        self.connectionErrorMessage = ""
-                        self.setEditingAPIKey(false, for: providerID)
-                        self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
+                if let config = reasoningConfig, config.isEnabled {
+                    if config.parameterName == "enable_thinking" {
+                        dict[config.parameterName] = config.parameterValue == "true"
+                    } else {
+                        dict[config.parameterName] = config.parameterValue
                     }
-                } else {
-                    // Parse error response for more details
+                }
+
+                requestDict = dict
+            } else {
+                var dict: [String: Any] = [
+                    "model": trimmedModel,
+                    "input": [["role": "user", "content": "test"]],
+                    "max_output_tokens": 50,
+                ]
+
+                if let config = reasoningConfig, config.isEnabled {
+                    if config.parameterName == "reasoning_effort" {
+                        dict["reasoning"] = ["effort": config.parameterValue]
+                    } else if config.parameterName == "enable_thinking" {
+                        dict[config.parameterName] = config.parameterValue == "true"
+                    } else {
+                        dict[config.parameterName] = config.parameterValue
+                    }
+                }
+
+                requestDict = dict
+            }
+
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: requestDict, options: []) else {
+                return "Internal error: Failed to create test request payload"
+            }
+            request.httpBody = jsonData
+
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+
+                if let httpResponse = response as? HTTPURLResponse {
+                    let statusCode = httpResponse.statusCode
+
+                    if statusCode >= 200, statusCode < 300 {
+                        return nil
+                    }
+
                     let errorMessage = self.interpretVerificationError(
                         statusCode: statusCode,
                         responseData: data,
@@ -711,33 +708,42 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                         endpoint: fullURL
                     )
                     DebugLogger.shared.error(
-                        "testAPIConnection failed: HTTP \(statusCode) for \(providerID), model=\(trimmedModel)\nError: \(errorMessage)\nResponse: \(String(data: data, encoding: .utf8)?.prefix(500) ?? "nil")",
+                        "testAPIConnection failed: HTTP \(statusCode) for \(providerID), model=\(trimmedModel), endpoint=\(fullURL)\nError: \(errorMessage)\nResponse: \(String(data: data, encoding: .utf8)?.prefix(500) ?? "nil")",
                         source: "AISettingsView"
                     )
-                    await MainActor.run {
-                        self.updateConnectionStatus(.failed, for: providerID)
-                        self.connectionErrorMessage = errorMessage
-                    }
+                    return errorMessage
+                } else {
+                    return "Unexpected response type from server"
                 }
-            } else {
-                await MainActor.run {
-                    self.updateConnectionStatus(.failed, for: providerID)
-                    self.connectionErrorMessage = "Unexpected response type from server"
-                }
-            }
-        } catch {
-            let errorMessage = self.interpretNetworkError(error, providerID: providerID)
-            DebugLogger.shared.error(
-                "testAPIConnection network error for \(providerID): \(error.localizedDescription)",
-                source: "AISettingsView"
-            )
-            await MainActor.run {
-                self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = errorMessage
+            } catch {
+                let errorMessage = self.interpretNetworkError(error, providerID: providerID)
+                DebugLogger.shared.error(
+                    "testAPIConnection network error for \(providerID), endpoint=\(fullURL): \(error.localizedDescription)",
+                    source: "AISettingsView"
+                )
+                return errorMessage
             }
         }
 
+        var errorMessage = await attemptVerification(fullURL: fullURL)
+        if let primaryError = errorMessage, let fallbackURL {
+            DebugLogger.shared.info(
+                "testAPIConnection retrying with fallback endpoint \(fallbackURL) after primary error: \(primaryError)",
+                source: "AISettingsView"
+            )
+            errorMessage = await attemptVerification(fullURL: fallbackURL)
+        }
+
         await MainActor.run {
+            if let errorMessage {
+                self.updateConnectionStatus(.failed, for: providerID)
+                self.connectionErrorMessage = errorMessage
+            } else {
+                self.updateConnectionStatus(.success, for: providerID)
+                self.connectionErrorMessage = ""
+                self.setEditingAPIKey(false, for: providerID)
+                self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
+            }
             self.isTestingConnection = false
         }
     }

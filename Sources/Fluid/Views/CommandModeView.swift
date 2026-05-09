@@ -87,7 +87,7 @@ struct CommandModeView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color(red: 1.0, green: 0.35, blue: 0.35))  // Command mode red
+                    .background(Color(red: 1.0, green: 0.35, blue: 0.35)) // Command mode red
                     .cornerRadius(4)
 
                 Spacer()
@@ -323,8 +323,7 @@ struct CommandModeView: View {
     private var howToSection: some View {
         VStack(spacing: 0) {
             // Toggle button with hover effect
-            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { self.showHowTo.toggle() } })
-            {
+            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { self.showHowTo.toggle() } }) {
                 HStack {
                     Image(systemName: "questionmark.circle")
                         .font(.caption)
@@ -479,7 +478,7 @@ struct CommandModeView: View {
                 // Scroll when processing starts, not on every streaming update
                 if isProcessing {
                     self.scrollToBottom(proxy)
-                    self.isThinkingExpanded = false  // Collapse thinking for new request
+                    self.isThinkingExpanded = false // Collapse thinking for new request
                 }
             }
             .onChange(of: self.service.currentStep) { _, _ in
@@ -572,10 +571,10 @@ struct CommandModeView: View {
         guard let step = service.currentStep else { return "Working..." }
         switch step {
         case .thinking: return "Thinking..."
-        case .checking(let cmd): return "Checking \(self.truncateCommand(cmd, to: 30))"
-        case .executing(let cmd): return "Running \(self.truncateCommand(cmd, to: 30))"
+        case let .checking(cmd): return "Checking \(self.truncateCommand(cmd, to: 30))"
+        case let .executing(cmd): return "Running \(self.truncateCommand(cmd, to: 30))"
         case .verifying: return "Verifying..."
-        case .completed(let success): return success ? "Done" : "Stopped"
+        case let .completed(success): return success ? "Done" : "Stopped"
         }
     }
 
@@ -604,8 +603,8 @@ struct CommandModeView: View {
         let runButtonTitle = isTerminalCommand ? "Run Command" : "Run Tool"
         let detailText =
             pending.purpose?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? pending.purpose
-            : (isTerminalCommand ? nil : pending.toolName)
+                ? pending.purpose
+                : (isTerminalCommand ? nil : pending.toolName)
 
         return VStack(spacing: 10) {
             Divider()
@@ -912,11 +911,13 @@ struct ThinkingShimmerLabel: View {
                             .init(color: Color.primary.opacity(0.35), location: 0),
                             .init(
                                 color: Color.primary.opacity(0.35),
-                                location: max(0, self.shimmerPhase - 0.15)),
+                                location: max(0, self.shimmerPhase - 0.15)
+                            ),
                             .init(color: Color.primary.opacity(0.85), location: self.shimmerPhase),
                             .init(
                                 color: Color.primary.opacity(0.35),
-                                location: min(1, self.shimmerPhase + 0.15)),
+                                location: min(1, self.shimmerPhase + 0.15)
+                            ),
                             .init(color: Color.primary.opacity(0.35), location: 1),
                         ],
                         startPoint: .leading,
@@ -985,7 +986,7 @@ struct MessageBubble: View {
         VStack(alignment: .leading, spacing: 6) {
             // Thinking section (collapsible) - only if setting is enabled
             if let thinking = message.thinking, !thinking.isEmpty,
-                SettingsStore.shared.showThinkingTokens
+               SettingsStore.shared.showThinkingTokens
             {
                 self.thinkingSection(thinking)
             }
@@ -1090,7 +1091,7 @@ struct MessageBubble: View {
             }
 
             if let purpose = tc.purpose,
-                !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+               !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
                 Text(purpose)
                     .font(.system(size: 11))
@@ -1213,10 +1214,11 @@ struct MessageBubble: View {
 
     private func parseToolOutput(_ json: String) -> ParsedOutput {
         guard let data = json.data(using: .utf8),
-            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             return ParsedOutput(
-                success: false, output: json, error: nil, exitCode: -1, executionTime: 0)
+                success: false, output: json, error: nil, exitCode: -1, executionTime: 0
+            )
         }
 
         return ParsedOutput(
