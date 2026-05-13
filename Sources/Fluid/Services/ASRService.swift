@@ -1065,6 +1065,40 @@ final class ASRService: ObservableObject {
         }
     }
 
+    func transcribeSamplesForAPI(_ inputSamples: [Float]) async throws -> ASRTranscriptionResult {
+        var samples = inputSamples
+        guard !samples.isEmpty else {
+            return ASRTranscriptionResult(text: "", confidence: 0)
+        }
+
+        let minSamples = 16_000
+        if samples.count < minSamples {
+            samples.append(contentsOf: repeatElement(0.0, count: minSamples - samples.count))
+        }
+
+        try await self.ensureAsrReady()
+        guard self.transcriptionProvider.isReady else {
+            throw NSError(
+                domain: "ASRService",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Transcription provider is not ready."]
+            )
+        }
+
+        let result = try await transcriptionExecutor.run { [provider = self.transcriptionProvider] in
+            try await provider.transcribeFinal(samples)
+        }
+
+        if !self.hasCompletedFirstTranscription {
+            self.hasCompletedFirstTranscription = true
+            self.isLoadingModel = false
+        }
+
+        let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+        self.recordWordBoostHitIfAny(transcribedText: cleanedText)
+        return ASRTranscriptionResult(text: cleanedText, confidence: result.confidence)
+    }
+
     func stopWithoutTranscription() async {
         guard self.isRunning else { return }
         defer { self.applyPendingParakeetVocabularyReloadIfNeeded() }
