@@ -22,6 +22,7 @@ class NotchContentState: ObservableObject {
     @Published var mode: OverlayMode = .dictation
     @Published var promptPickerMode: SettingsStore.PromptMode = .dictate
     @Published var isProcessing: Bool = false // AI processing state
+    @Published var isAIProcessingFailureVisible: Bool = false
     @Published var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? = nil
     @Published var promptModeOverrideProfileName: String? = nil // Name shown in overlay when prompt mode hotkey is active
     @Published var promptModeOverrideProfileID: String? = nil // ID of the active override profile (for checkmark in menu)
@@ -89,7 +90,18 @@ class NotchContentState: ObservableObject {
 
     /// Set AI processing state
     func setProcessing(_ processing: Bool) {
+        if processing {
+            self.clearAIProcessingFailure()
+        }
         self.isProcessing = processing
+    }
+
+    func showAIProcessingFailure() {
+        self.isAIProcessingFailureVisible = true
+    }
+
+    func clearAIProcessingFailure() {
+        self.isAIProcessingFailureVisible = false
     }
 
     /// Update transcription and recompute cached lines
@@ -635,9 +647,13 @@ struct NotchExpandedView: View {
         _ title: String,
         rowID: String,
         isSelected: Bool,
+        isEnabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        Button(action: {
+            guard isEnabled else { return }
+            action()
+        }) {
             Text(title)
                 .font(.system(size: 9, weight: isSelected ? .semibold : .medium))
                 .foregroundStyle(.white.opacity(isSelected ? 0.96 : 0.84))
@@ -649,14 +665,17 @@ struct NotchExpandedView: View {
                 .background(self.promptMenuRowBackground(isSelected: isSelected, rowID: rowID))
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.45)
         .onHover { hovering in
-            self.hoveredPromptMenuRowID = hovering ? rowID : nil
+            self.hoveredPromptMenuRowID = hovering && isEnabled ? rowID : nil
         }
     }
 
     private func promptMenuContent() -> some View {
         let promptMode = self.activePromptMode ?? .dictate
         let activeDictationSlot = self.activeDictationShortcutSlot
+        let fluid1Locked = promptMode.normalized == .dictate && Fluid1PromptFormat.isAvailable(settings: self.settings)
         return VStack(alignment: .leading, spacing: 2) {
             Text("AI Prompt")
                 .font(.system(size: 8, weight: .semibold))
@@ -675,7 +694,8 @@ struct NotchExpandedView: View {
                         self.promptMenuRow(
                             "Off",
                             rowID: "off",
-                            isSelected: self.settings.dictationPromptSelection(for: activeDictationSlot) == .off
+                            isSelected: !fluid1Locked && self.settings.dictationPromptSelection(for: activeDictationSlot) == .off,
+                            isEnabled: !fluid1Locked
                         ) {
                             self.contentState.onDictationPromptSelectionRequested?(.off)
                             self.restoreRecordingTargetFocus()
@@ -683,7 +703,7 @@ struct NotchExpandedView: View {
                         }
                     }
 
-                    self.promptMenuRow("Default", rowID: "default", isSelected: defaultSelected) {
+                    self.promptMenuRow("Default", rowID: "default", isSelected: !fluid1Locked && defaultSelected, isEnabled: !fluid1Locked) {
                         if promptMode.normalized == .dictate {
                             self.contentState.onDictationPromptSelectionRequested?(.default)
                         } else {
@@ -691,6 +711,20 @@ struct NotchExpandedView: View {
                         }
                         self.restoreRecordingTargetFocus()
                         self.dismissPromptHoverMenu()
+                    }
+
+                    if promptMode.normalized == .dictate {
+                        let fluid1Available = Fluid1PromptFormat.isAvailable(settings: self.settings)
+                        self.promptMenuRow(
+                            "Fluid-1",
+                            rowID: "fluid-1",
+                            isSelected: fluid1Locked || self.settings.dictationPromptSelection(for: activeDictationSlot) == .fluid1,
+                            isEnabled: fluid1Available
+                        ) {
+                            self.contentState.onDictationPromptSelectionRequested?(.fluid1)
+                            self.restoreRecordingTargetFocus()
+                            self.dismissPromptHoverMenu()
+                        }
                     }
 
                     let profiles = self.settings.promptProfiles(for: promptMode)
@@ -702,7 +736,8 @@ struct NotchExpandedView: View {
                             self.promptMenuRow(
                                 profile.name.isEmpty ? "Untitled" : profile.name,
                                 rowID: profile.id,
-                                isSelected: isSelected
+                                isSelected: !fluid1Locked && isSelected,
+                                isEnabled: !fluid1Locked
                             ) {
                                 if promptMode.normalized == .dictate {
                                     self.contentState.onDictationPromptSelectionRequested?(.profile(profile.id))
@@ -859,7 +894,42 @@ struct NotchExpandedView: View {
 
             self.promptHoverMenuRow
 
-            if self.presentationPolicy.showsStreamingPreview && self.hasTranscription && !self.contentState.isProcessing {
+            if self.contentState.isAIProcessingFailureVisible && !self.contentState.isProcessing {
+                HStack(spacing: 6) {
+                    Text("AI Enhancement failed")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Spacer(minLength: 2)
+
+                    Button {
+                        self.contentState.clearAIProcessingFailure()
+                        self.contentState.onReprocessLastRequested?()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 9, weight: .bold))
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Try again")
+
+                    Button {
+                        self.contentState.clearAIProcessingFailure()
+                        NotchOverlayManager.shared.hide()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                }
+                .foregroundStyle(.white.opacity(0.9))
+                .frame(width: self.previewMaxWidth, alignment: .leading)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            } else if self.presentationPolicy.showsStreamingPreview && self.hasTranscription && !self.contentState.isProcessing {
                 let previewText = self.visiblePreviewText
                 if !previewText.isEmpty {
                     ScrollViewReader { proxy in

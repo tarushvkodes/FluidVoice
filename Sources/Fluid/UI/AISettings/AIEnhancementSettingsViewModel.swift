@@ -1535,10 +1535,31 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func isPrimaryDictationPromptSelectionOff() -> Bool {
-        self.settings.isDictationPromptOff
+        if self.isFluid1ModelSelected() { return false }
+        return self.settings.isDictationPromptOff
+    }
+
+    func isFluid1PromptAvailable() -> Bool {
+        Fluid1PromptFormat.isAvailable(settings: self.settings)
+    }
+
+    func isFluid1ModelSelected() -> Bool {
+        Fluid1PromptFormat.isAvailable(settings: self.settings)
+    }
+
+    func isFluid1PromptSelected() -> Bool {
+        self.isFluid1ModelSelected() || self.settings.dictationPromptSelection == .fluid1
+    }
+
+    func selectFluid1PromptIfAvailable() {
+        guard self.isFluid1PromptAvailable() else { return }
+        self.settings.setDictationPromptSelection(.fluid1)
+        self.selectedDictationPromptID = self.settings.selectedDictationPromptID
+        self.isDictationPromptOff = self.settings.isDictationPromptOff
     }
 
     func selectPrimaryDictationPromptOff() {
+        guard !self.isFluid1ModelSelected() else { return }
         self.settings.setDictationPromptSelection(.off)
         self.selectedDictationPromptID = self.settings.selectedDictationPromptID
         self.isDictationPromptOff = self.settings.isDictationPromptOff

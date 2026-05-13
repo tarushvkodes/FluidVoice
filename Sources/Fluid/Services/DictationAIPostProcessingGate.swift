@@ -12,6 +12,9 @@ enum DictationAIPostProcessingGate {
 
     static func isConfigured(for slot: SettingsStore.DictationShortcutSlot, appBundleID: String? = nil) -> Bool {
         let settings = SettingsStore.shared
+        if Fluid1PromptFormat.isAvailable(settings: settings) {
+            return self.isProviderConfigured()
+        }
         guard settings.dictationPromptSelection(for: slot) != .off else { return false }
         if let appBundleID,
            settings.promptRoutingScope(for: .dictate) == .selectedAppsOnly,

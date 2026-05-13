@@ -62,7 +62,8 @@ extension AIEnhancementSettingsView {
         onManage: (() -> Void)? = nil,
         onResetDefault: (() -> Void)? = nil,
         canResetDefault: Bool = false,
-        onDelete: (() -> Void)? = nil
+        onDelete: (() -> Void)? = nil,
+        isEnabled: Bool = true
     ) -> some View {
         let tone = self.modeAccentColor(mode)
         let selectedStrokeOpacity: Double = mode.normalized == .dictate ? 0.52 : 0.38
@@ -72,7 +73,10 @@ extension AIEnhancementSettingsView {
                 .fill(isHovering ? tone.opacity(0.5) : .clear)
                 .frame(width: 3, height: 34)
 
-            Button(action: onUse) {
+            Button(action: {
+                guard isEnabled else { return }
+                onUse()
+            }) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(title)
@@ -101,6 +105,7 @@ extension AIEnhancementSettingsView {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(!isEnabled)
 
             Spacer(minLength: 8)
 
@@ -136,10 +141,12 @@ extension AIEnhancementSettingsView {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(self.theme.palette.secondaryText)
+                    .disabled(!isEnabled)
                 }
             }
         }
         .padding(12)
+        .opacity(isEnabled ? 1 : 0.48)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(self.theme.palette.cardBackground.opacity(0.64))
@@ -182,7 +189,8 @@ extension AIEnhancementSettingsView {
     }
 
     private var promptProcessingControl: some View {
-        let isOff = self.viewModel.isPrimaryDictationPromptSelectionOff()
+        let isFluid1Locked = self.viewModel.isFluid1ModelSelected()
+        let isOff = isFluid1Locked ? false : self.viewModel.isPrimaryDictationPromptSelectionOff()
 
         return HStack(alignment: .center, spacing: 7) {
             Text("AI Enhancement")
@@ -190,9 +198,9 @@ extension AIEnhancementSettingsView {
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .lineLimit(1)
 
-            self.cleanupSegmentedControl(isOff: isOff, mode: .dictate)
+            self.cleanupSegmentedControl(isOff: isOff, mode: .dictate, isEnabled: !isFluid1Locked)
         }
-        .help(isOff ? "Off: dictation types the raw transcript. Prompts and app overrides are paused." : "On: dictation follows the selected prompt scope.")
+        .help(isFluid1Locked ? "Fluid-1 model selected. AI Enhancement uses the trained Fluid prompt." : (isOff ? "Off: dictation types the raw transcript. Prompts and app overrides are paused." : "On: dictation follows the selected prompt scope."))
     }
 
     private var promptModeTabSelector: some View {
@@ -257,8 +265,9 @@ extension AIEnhancementSettingsView {
         let customProfiles = self.viewModel.dictationPromptProfiles
             .filter { $0.mode.normalized == mode }
         let tone = self.modeAccentColor(mode)
-        let isSelectedAppsOnly = self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
-        let isPromptRoutingPaused = mode.normalized == .dictate && self.viewModel.isPrimaryDictationPromptSelectionOff()
+        let isFluid1Locked = mode.normalized == .dictate && self.viewModel.isFluid1ModelSelected()
+        let isSelectedAppsOnly = !isFluid1Locked && self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
+        let isPromptRoutingPaused = mode.normalized == .dictate && self.viewModel.isPrimaryDictationPromptSelectionOff() && !isFluid1Locked
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -295,15 +304,32 @@ extension AIEnhancementSettingsView {
                         subtitle: self.viewModel.promptPreview(self.viewModel.defaultPromptBodyPreview(for: mode)),
                         mode: mode,
                         isSelected: mode.normalized == .dictate
-                            ? (!self.viewModel.isPrimaryDictationPromptSelectionOff() && self.viewModel.selectedPromptID(for: mode) == nil)
+                            ? (!isFluid1Locked && !self.viewModel.isPrimaryDictationPromptSelectionOff() && self.viewModel.selectedPromptID(for: mode) == nil)
                             : self.viewModel.selectedPromptID(for: mode) == nil,
                         onUse: {
                             self.viewModel.setSelectedPromptID(nil, for: mode)
                         },
                         onManage: { self.viewModel.openDefaultPromptViewer(for: mode) },
                         onResetDefault: { self.viewModel.resetDefaultPromptOverride(for: mode) },
-                        canResetDefault: self.viewModel.hasDefaultPromptOverride(for: mode)
+                        canResetDefault: self.viewModel.hasDefaultPromptOverride(for: mode),
+                        isEnabled: !isFluid1Locked
                     )
+
+                    if mode.normalized == .dictate {
+                        self.promptProfileCard(
+                            cardKey: "\(mode.normalized.rawValue)-fluid-1",
+                            title: "Fluid-1",
+                            subtitle: isFluid1Locked
+                                ? "Uses the trained Fluid-1 prompt format. Works well with Fluid models only."
+                                : "Works well with Fluid models only. Select a Fluid-1 model to enable.",
+                            mode: mode,
+                            isSelected: self.viewModel.isFluid1PromptSelected(),
+                            onUse: {
+                                self.viewModel.selectFluid1PromptIfAvailable()
+                            },
+                            isEnabled: isFluid1Locked
+                        )
+                    }
 
                     if customProfiles.isEmpty {
                         Text("No custom \(self.friendlyModeName(mode).lowercased()) prompts yet.")
@@ -319,17 +345,25 @@ extension AIEnhancementSettingsView {
                                     ? "Empty prompt (uses Default)"
                                     : self.viewModel.promptPreview(SettingsStore.stripBasePrompt(for: profile.mode, from: profile.prompt)),
                                 mode: profile.mode,
-                                isSelected: self.viewModel.selectedPromptID(for: profile.mode) == profile.id,
+                                isSelected: !isFluid1Locked && self.viewModel.selectedPromptID(for: profile.mode) == profile.id,
                                 onUse: {
                                     self.viewModel.setSelectedPromptID(profile.id, for: profile.mode)
                                 },
                                 onManage: { self.viewModel.openEditor(for: profile) },
-                                onDelete: { self.viewModel.requestDeletePrompt(profile) }
+                                onDelete: { self.viewModel.requestDeletePrompt(profile) },
+                                isEnabled: !isFluid1Locked
                             )
                         }
                     }
 
-                    self.appPromptBindingsSection(mode: mode)
+                    self.appPromptBindingsSection(mode: mode, isEnabled: !isFluid1Locked)
+                }
+
+                if isFluid1Locked {
+                    Text("Fluid-1 model selected. Prompt choices are locked until you change model or provider.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
                 }
             }
             .opacity(isPromptRoutingPaused ? 0.34 : 1)
@@ -361,7 +395,7 @@ extension AIEnhancementSettingsView {
         .padding(.horizontal, 4)
     }
 
-    private func cleanupSegmentedControl(isOff: Bool, mode: SettingsStore.PromptMode) -> some View {
+    private func cleanupSegmentedControl(isOff: Bool, mode: SettingsStore.PromptMode, isEnabled: Bool = true) -> some View {
         let tone = self.modeAccentColor(mode)
 
         return
@@ -371,6 +405,7 @@ extension AIEnhancementSettingsView {
                     key: "off",
                     isSelected: isOff,
                     tone: tone,
+                    isEnabled: isEnabled,
                     action: { self.viewModel.selectPrimaryDictationPromptOff() }
                 )
 
@@ -379,6 +414,7 @@ extension AIEnhancementSettingsView {
                     key: "on",
                     isSelected: !isOff,
                     tone: tone,
+                    isEnabled: isEnabled,
                     action: { self.viewModel.setSelectedPromptID(nil, for: mode) }
                 )
             }
@@ -399,26 +435,34 @@ extension AIEnhancementSettingsView {
         key: String,
         isSelected: Bool,
         tone: Color,
+        isEnabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
         let isHovering = self.hoveredCleanupControlKey == key
         let cornerRadius: CGFloat = 9
 
-        return Button(title, action: action)
-            .buttonStyle(.plain)
-            .padding(.horizontal, 12)
-            .frame(height: 26)
-            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .fluidControlSurface(
-                isSelected: isSelected,
-                isHovered: isHovering,
-                tone: tone,
-                cornerRadius: cornerRadius
-            )
-            .foregroundStyle(isSelected ? tone : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
-            .onHover { hovering in
-                self.hoveredCleanupControlKey = hovering ? key : nil
-            }
+        return Button {
+            guard isEnabled else { return }
+            action()
+        } label: {
+            Text(title)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .frame(height: 26)
+        .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .fluidControlSurface(
+            isSelected: isSelected,
+            isHovered: isHovering,
+            tone: tone,
+            cornerRadius: cornerRadius
+        )
+        .foregroundStyle(isSelected ? tone : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.48)
+        .onHover { hovering in
+            self.hoveredCleanupControlKey = hovering && isEnabled ? key : nil
+        }
     }
 
     private func promptRoutingScopeRow(mode: SettingsStore.PromptMode) -> some View {
@@ -470,13 +514,16 @@ extension AIEnhancementSettingsView {
         mode: SettingsStore.PromptMode
     ) -> some View {
         let selectedScope = self.viewModel.promptRoutingScope(for: mode)
-        let isSelected = selectedScope == scope
         let key = "\(mode.normalized.rawValue)-\(scope.rawValue)"
-        let isHovering = self.hoveredPromptScopeKey == key
+        let isFluid1Locked = mode.normalized == .dictate && self.viewModel.isFluid1ModelSelected()
+        let isSelected = isFluid1Locked ? scope == .allApps : selectedScope == scope
+        let isEnabled = !isFluid1Locked
+        let isHovering = isEnabled && self.hoveredPromptScopeKey == key
         let tone = self.modeAccentColor(mode)
         let cornerRadius: CGFloat = 9
 
         return Button {
+            guard isEnabled else { return }
             self.viewModel.setPromptRoutingScope(scope, for: mode)
         } label: {
             Text(title)
@@ -492,8 +539,10 @@ extension AIEnhancementSettingsView {
                 )
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.48)
         .onHover { hovering in
-            self.hoveredPromptScopeKey = hovering ? key : nil
+            self.hoveredPromptScopeKey = hovering && isEnabled ? key : nil
         }
     }
 
@@ -604,7 +653,7 @@ extension AIEnhancementSettingsView {
     }
 
     @ViewBuilder
-    private func appPromptBindingsSection(mode: SettingsStore.PromptMode, isEmphasized: Bool = false) -> some View {
+    private func appPromptBindingsSection(mode: SettingsStore.PromptMode, isEmphasized: Bool = false, isEnabled: Bool = true) -> some View {
         let bindings = self.viewModel.appBindings(for: mode)
         let appTargets = self.viewModel.appBindingTargets(for: mode)
         let modeProfiles = self.viewModel.dictationPromptProfiles
@@ -641,6 +690,8 @@ extension AIEnhancementSettingsView {
                 }
                 .buttonStyle(CompactButtonStyle(isReady: true))
                 .frame(minHeight: 26)
+                .disabled(!isEnabled)
+                .opacity(isEnabled ? 1 : 0.48)
 
                 Spacer(minLength: 8)
             }
@@ -660,7 +711,8 @@ extension AIEnhancementSettingsView {
                     self.appPromptBindingRow(
                         binding: binding,
                         mode: mode,
-                        modeProfiles: modeProfiles
+                        modeProfiles: modeProfiles,
+                        isEnabled: isEnabled
                     )
                 }
             }
@@ -672,7 +724,8 @@ extension AIEnhancementSettingsView {
     private func appPromptBindingRow(
         binding: SettingsStore.AppPromptBinding,
         mode: SettingsStore.PromptMode,
-        modeProfiles: [SettingsStore.DictationPromptProfile]
+        modeProfiles: [SettingsStore.DictationPromptProfile],
+        isEnabled: Bool = true
     ) -> some View {
         HStack(spacing: 10) {
             self.appIconView(bundleID: binding.appBundleID)
@@ -729,8 +782,10 @@ extension AIEnhancementSettingsView {
             }
             .menuStyle(.borderlessButton)
             .fixedSize(horizontal: true, vertical: false)
+            .disabled(!isEnabled)
 
             Button {
+                guard isEnabled else { return }
                 self.viewModel.removeAppPromptBinding(binding)
             } label: {
                 Image(systemName: "trash")
@@ -738,8 +793,10 @@ extension AIEnhancementSettingsView {
                     .foregroundStyle(.red.opacity(0.9))
             }
             .buttonStyle(.plain)
+            .disabled(!isEnabled)
             .help("Remove app-specific override")
         }
+        .opacity(isEnabled ? 1 : 0.48)
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

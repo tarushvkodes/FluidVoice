@@ -105,8 +105,7 @@ final class SettingsStore: ObservableObject {
     }
 
     enum DictationPromptSelection: Equatable {
-        case off
-        case `default`
+        case off, `default`, fluid1
         case profile(String)
     }
 
@@ -311,27 +310,27 @@ final class SettingsStore: ObservableObject {
     }
 
     func dictationPromptSelection(for slot: DictationShortcutSlot) -> DictationPromptSelection {
-        if self.isDictationPromptOff(for: slot) {
-            return .off
-        }
+        if Fluid1PromptFormat.isAvailable(settings: self) { return .fluid1 }
+        if self.isDictationPromptOff(for: slot) { return .off }
         if let promptID = self.selectedDictationPromptID(for: slot) {
+            if promptID == Fluid1PromptFormat.promptSelectionID { return .default }
             return .profile(promptID)
         }
         return .default
     }
 
     func setDictationPromptSelection(_ selection: DictationPromptSelection, for slot: DictationShortcutSlot) {
+        let selectedID: String?
         switch selection {
-        case .off:
-            self.setDictationPromptOff(true, for: slot)
-            self.setSelectedDictationPromptID(nil, for: slot)
-        case .default:
-            self.setDictationPromptOff(false, for: slot)
-            self.setSelectedDictationPromptID(nil, for: slot)
+        case .off, .default:
+            selectedID = nil
+        case .fluid1:
+            selectedID = Fluid1PromptFormat.promptSelectionID
         case let .profile(promptID):
-            self.setDictationPromptOff(false, for: slot)
-            self.setSelectedDictationPromptID(promptID, for: slot)
+            selectedID = promptID
         }
+        self.setDictationPromptOff(selection == .off, for: slot)
+        self.setSelectedDictationPromptID(selectedID, for: slot)
     }
 
     /// Convenience: currently selected profile, or nil if Default/invalid selection.
@@ -387,6 +386,8 @@ final class SettingsStore: ObservableObject {
     func selectedPromptID(for mode: PromptMode) -> String? {
         switch mode.normalized {
         case .dictate:
+            if self.selectedDictationPromptID == Fluid1PromptFormat.promptSelectionID,
+               !Fluid1PromptFormat.isAvailable(settings: self) { return nil }
             return self.selectedDictationPromptID
         case .edit:
             return self.selectedEditPromptID
@@ -438,7 +439,7 @@ final class SettingsStore: ObservableObject {
 
     func resolvedDictationPromptProfile(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptProfile? {
         switch self.dictationPromptSelection(for: slot) {
-        case .off:
+        case .off, .fluid1:
             return nil
         case let .profile(promptID):
             return self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate })
@@ -452,11 +453,14 @@ final class SettingsStore: ObservableObject {
     }
 
     func isAppDictationPromptBindingActive(for slot: DictationShortcutSlot, appBundleID: String?) -> Bool {
+        guard !Fluid1PromptFormat.isAvailable(settings: self) else { return false }
         guard self.dictationPromptSelection(for: slot) == .default else { return false }
         return self.hasAppPromptBinding(for: .dictate, appBundleID: appBundleID)
     }
 
     func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
+        if Fluid1PromptFormat.isAvailable(settings: self) { return "Fluid-1" }
+
         switch self.dictationPromptSelection(for: slot) {
         case .off:
             return "Off"
@@ -466,6 +470,7 @@ final class SettingsStore: ObservableObject {
                 return name.isEmpty ? "Untitled" : name
             }
             return "Default"
+        case .fluid1: return "Fluid-1"
         case let .profile(promptID):
             guard let profile = self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate }) else {
                 return "Default"
@@ -924,7 +929,7 @@ final class SettingsStore: ObservableObject {
         switch self.dictationPromptSelection(for: slot) {
         case .off:
             return ""
-        case .default:
+        case .default, .fluid1:
             return self.effectivePromptBody(for: .dictate, appBundleID: appBundleID)
         case let .profile(promptID):
             guard let profile = self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate }) else {
@@ -945,7 +950,7 @@ final class SettingsStore: ObservableObject {
         }
 
         switch self.dictationPromptSelection(for: slot) {
-        case .off, .default:
+        case .off, .default, .fluid1:
             return self.effectiveSystemPrompt(for: .dictate, appBundleID: appBundleID)
         case let .profile(promptID):
             guard let profile = self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate }) else {

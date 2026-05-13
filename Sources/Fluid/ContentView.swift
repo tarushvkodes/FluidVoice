@@ -1586,10 +1586,16 @@ struct ContentView: View {
         // chat tab specifically — keep the legacy two-message layout where
         // the prompt is the system turn and the input is the user turn.
         let isDictationCall = overrideSystemPrompt != nil || dictationSlot != nil
+        let useFluid1PromptFormat = overrideSystemPrompt == nil &&
+            isDictationCall &&
+            Fluid1PromptFormat.matches(model: derivedSelectedModel)
 
         let systemPrompt: String
         let userMessageContent: String
-        if isDictationCall {
+        if useFluid1PromptFormat {
+            systemPrompt = Fluid1PromptFormat.systemPrompt
+            userMessageContent = inputText
+        } else if isDictationCall {
             systemPrompt = ""
             userMessageContent = SettingsStore.renderDictationUserMessage(
                 promptText: promptText,
@@ -1737,7 +1743,7 @@ struct ContentView: View {
             apiKey: apiKey,
             streaming: enableStreaming,
             tools: [],
-            temperature: isTemperatureUnsupported ? nil : 0.2,
+            temperature: isTemperatureUnsupported ? nil : (useFluid1PromptFormat ? 0 : 0.2),
             extraParameters: extraParams
         )
 
@@ -1985,6 +1991,10 @@ struct ContentView: View {
                 aiProcessingError: aiFallbackReason
             )
         }
+        let shouldShowAIProcessingFailure = shouldPersistOutputs && aiFallbackReason != nil
+        if shouldShowAIProcessingFailure {
+            NotchContentState.shared.showAIProcessingFailure()
+        }
 
         // When FluidVoice itself is frontmost, the bound editor already receives `finalText`.
         // Avoid re-inserting or overwriting the clipboard in that self-target case.
@@ -2046,7 +2056,9 @@ struct ContentView: View {
                 aiProvider: modelInfo.provider
             )
 
-            NotchOverlayManager.shared.hide()
+            if !shouldShowAIProcessingFailure {
+                NotchOverlayManager.shared.hide()
+            }
         } else if shouldPersistOutputs,
                   SettingsStore.shared.copyTranscriptionToClipboard == false,
                   SettingsStore.shared.saveTranscriptionHistory
@@ -2060,7 +2072,7 @@ struct ContentView: View {
             )
         }
 
-        if !didTypeExternally {
+        if !didTypeExternally, !shouldShowAIProcessingFailure {
             NotchOverlayManager.shared.hide()
         }
     }
@@ -2201,7 +2213,10 @@ struct ContentView: View {
         let shouldUseAI = DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appInfo.bundleId)
         if shouldUseAI {
             do {
-                finalText = try await self.processTextWithAI(transcribedText)
+                finalText = try await self.processTextWithAI(
+                    transcribedText,
+                    dictationSlot: .primary
+                )
             } catch {
                 DebugLogger.shared.error(
                     "AI reprocess failed, falling back to raw transcription: \(error.localizedDescription)",
@@ -2226,6 +2241,9 @@ struct ContentView: View {
                 windowTitle: appInfo.windowTitle,
                 aiProcessingError: aiFallbackReason
             )
+        }
+        if aiFallbackReason != nil {
+            NotchContentState.shared.showAIProcessingFailure()
         }
 
         if SettingsStore.shared.copyTranscriptionToClipboard {
@@ -2572,6 +2590,7 @@ struct ContentView: View {
             _ = self.handleCancelShortcut()
         }
         NotchContentState.shared.onDictationPromptSelectionRequested = { selection in
+            guard !Fluid1PromptFormat.isAvailable() else { return }
             let slot = self.activeDictationShortcutSlot ?? .primary
             SettingsStore.shared.setDictationPromptSelection(selection, for: slot)
             self.applyDictationShortcutSelectionContext(for: slot)
@@ -2923,11 +2942,22 @@ extension ContentView {
         NotchContentState.shared.activeDictationShortcutSlot = slot
         NotchContentState.shared.isPromptModeActive = (slot == .secondary)
 
+        if Fluid1PromptFormat.isAvailable(settings: settings) {
+            self.promptModeOverrideText = nil
+            NotchContentState.shared.promptModeOverrideProfileName = "Fluid-1"
+            NotchContentState.shared.promptModeOverrideProfileID = Fluid1PromptFormat.promptSelectionID
+            return
+        }
+
         switch settings.dictationPromptSelection(for: slot) {
         case .off, .default:
             self.promptModeOverrideText = nil
             NotchContentState.shared.promptModeOverrideProfileName = nil
             NotchContentState.shared.promptModeOverrideProfileID = nil
+        case .fluid1:
+            self.promptModeOverrideText = nil
+            NotchContentState.shared.promptModeOverrideProfileName = "Fluid-1"
+            NotchContentState.shared.promptModeOverrideProfileID = Fluid1PromptFormat.promptSelectionID
         case let .profile(profileID):
             guard let profile = settings.selectedDictationPromptProfile(for: slot) ?? settings.dictationPromptProfiles.first(where: {
                 $0.id == profileID && $0.mode.normalized == .dictate

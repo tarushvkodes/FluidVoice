@@ -132,21 +132,30 @@ struct SettingsView: View {
     private func dictationPromptSelectionBinding(for slot: SettingsStore.DictationShortcutSlot) -> Binding<String> {
         Binding(
             get: {
+                if Fluid1PromptFormat.isAvailable(settings: self.settings) {
+                    return Fluid1PromptFormat.promptSelectionID
+                }
                 switch self.settings.dictationPromptSelection(for: slot) {
                 case .off:
                     return "__OFF__"
                 case .default:
                     return "__DEFAULT__"
+                case .fluid1:
+                    return Fluid1PromptFormat.promptSelectionID
                 case let .profile(id):
                     return id
                 }
             },
             set: { newValue in
+                guard !Fluid1PromptFormat.isAvailable(settings: self.settings) else { return }
                 switch newValue {
                 case "__OFF__":
                     self.settings.setDictationPromptSelection(.off, for: slot)
                 case "__DEFAULT__":
                     self.settings.setDictationPromptSelection(.default, for: slot)
+                case Fluid1PromptFormat.promptSelectionID:
+                    guard Fluid1PromptFormat.isAvailable(settings: self.settings) else { return }
+                    self.settings.setDictationPromptSelection(.fluid1, for: slot)
                 default:
                     self.settings.setDictationPromptSelection(.profile(newValue), for: slot)
                 }
@@ -157,6 +166,7 @@ struct SettingsView: View {
     @ViewBuilder
     private func dictationPromptPicker(for slot: SettingsStore.DictationShortcutSlot) -> some View {
         let profiles = self.settings.promptProfiles(for: .dictate)
+        let fluid1Locked = Fluid1PromptFormat.isAvailable(settings: self.settings)
         HStack {
             Text("AI Prompt")
                 .font(.subheadline)
@@ -164,10 +174,15 @@ struct SettingsView: View {
                 .padding(.leading, 30)
             Spacer()
             Picker("", selection: self.dictationPromptSelectionBinding(for: slot)) {
-                Text("Off").tag("__OFF__")
-                Text("Default").tag("__DEFAULT__")
+                Text("Off").tag("__OFF__").disabled(fluid1Locked)
+                Text("Default").tag("__DEFAULT__").disabled(fluid1Locked)
+                Text("Fluid-1")
+                    .tag(Fluid1PromptFormat.promptSelectionID)
+                    .disabled(!fluid1Locked)
                 ForEach(profiles) { profile in
-                    Text(profile.name.isEmpty ? "Untitled" : profile.name).tag(profile.id)
+                    Text(profile.name.isEmpty ? "Untitled" : profile.name)
+                        .tag(profile.id)
+                        .disabled(fluid1Locked)
                 }
             }
             .frame(width: 190)

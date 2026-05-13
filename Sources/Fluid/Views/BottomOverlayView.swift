@@ -1284,6 +1284,10 @@ private struct BottomOverlayPromptMenuView: View {
     let onDismissRequested: () -> Void
     @State private var hoveredRowID: String?
 
+    private var fluid1Locked: Bool {
+        self.promptMode.normalized == .dictate && Fluid1PromptFormat.isAvailable(settings: self.settings)
+    }
+
     private func rowBackground(isSelected: Bool, rowID: String) -> some View {
         let isHovered = self.hoveredRowID == rowID
         let fillColor: Color
@@ -1315,8 +1319,9 @@ private struct BottomOverlayPromptMenuView: View {
     @ViewBuilder
     private func offRow() -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = self.settings.dictationPromptSelection(for: activeSlot) == .off
+        let isSelected = !self.fluid1Locked && self.settings.dictationPromptSelection(for: activeSlot) == .off
         Button(action: {
+            guard !self.fluid1Locked else { return }
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.off)
             } else {
@@ -1338,18 +1343,21 @@ private struct BottomOverlayPromptMenuView: View {
             .background(self.rowBackground(isSelected: isSelected, rowID: "off"))
         }
         .buttonStyle(.plain)
+        .disabled(self.fluid1Locked)
+        .opacity(self.fluid1Locked ? 0.45 : 1)
         .onHover { hovering in
-            self.hoveredRowID = hovering ? "off" : nil
+            self.hoveredRowID = hovering && !self.fluid1Locked ? "off" : nil
         }
     }
 
     @ViewBuilder
     private func defaultRow(selectedID: String?) -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = self.promptMode.normalized == .dictate
+        let isSelected = !self.fluid1Locked && (self.promptMode.normalized == .dictate
             ? (self.settings.dictationPromptSelection(for: activeSlot) == .default)
-            : (selectedID == nil)
+            : (selectedID == nil))
         Button(action: {
+            guard !self.fluid1Locked else { return }
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.default)
             } else {
@@ -1371,18 +1379,53 @@ private struct BottomOverlayPromptMenuView: View {
             .background(self.rowBackground(isSelected: isSelected, rowID: "default"))
         }
         .buttonStyle(.plain)
+        .disabled(self.fluid1Locked)
+        .opacity(self.fluid1Locked ? 0.45 : 1)
         .onHover { hovering in
-            self.hoveredRowID = hovering ? "default" : nil
+            self.hoveredRowID = hovering && !self.fluid1Locked ? "default" : nil
+        }
+    }
+
+    @ViewBuilder
+    private func fluid1Row() -> some View {
+        let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
+        let isAvailable = Fluid1PromptFormat.isAvailable(settings: self.settings)
+        let isSelected = isAvailable || self.settings.dictationPromptSelection(for: activeSlot) == .fluid1
+        Button(action: {
+            guard isAvailable else { return }
+            self.contentState.onDictationPromptSelectionRequested?(.fluid1)
+            self.restoreTypingTargetApp()
+            self.onDismissRequested()
+        }) {
+            HStack {
+                Text("Fluid-1")
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(self.rowBackground(isSelected: isSelected, rowID: "fluid-1"))
+        }
+        .buttonStyle(.plain)
+        .disabled(!isAvailable)
+        .opacity(isAvailable ? 1 : 0.45)
+        .help(isAvailable ? "Use Fluid-1 trained prompt format" : "Select a Fluid-1 model to enable this prompt")
+        .onHover { hovering in
+            self.hoveredRowID = hovering && isAvailable ? "fluid-1" : nil
         }
     }
 
     @ViewBuilder
     private func profileRow(_ profile: SettingsStore.DictationPromptProfile, selectedID: String?) -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = self.promptMode.normalized == .dictate
+        let isSelected = !self.fluid1Locked && (self.promptMode.normalized == .dictate
             ? (self.settings.dictationPromptSelection(for: activeSlot) == .profile(profile.id))
-            : (selectedID == profile.id)
+            : (selectedID == profile.id))
         Button(action: {
+            guard !self.fluid1Locked else { return }
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.profile(profile.id))
             } else {
@@ -1404,8 +1447,10 @@ private struct BottomOverlayPromptMenuView: View {
             .background(self.rowBackground(isSelected: isSelected, rowID: profile.id))
         }
         .buttonStyle(.plain)
+        .disabled(self.fluid1Locked)
+        .opacity(self.fluid1Locked ? 0.45 : 1)
         .onHover { hovering in
-            self.hoveredRowID = hovering ? profile.id : nil
+            self.hoveredRowID = hovering && !self.fluid1Locked ? profile.id : nil
         }
     }
 
@@ -1422,6 +1467,10 @@ private struct BottomOverlayPromptMenuView: View {
             }
 
             self.defaultRow(selectedID: selectedID)
+
+            if self.promptMode.normalized == .dictate {
+                self.fluid1Row()
+            }
 
             if !profiles.isEmpty {
                 Divider()
@@ -2072,12 +2121,17 @@ struct BottomOverlayView: View {
         self.shouldReservePreviewArea && self.contentState.isProcessing && self.processingStatusVisible
     }
 
+    private var shouldShowAIProcessingFailure: Bool {
+        self.shouldReservePreviewArea && self.contentState.isAIProcessingFailureVisible && !self.contentState.isProcessing
+    }
+
     private var shouldSuppressPreviewDuringRelease: Bool {
         self.contentState.isBottomOverlayReleaseTransitioning || self.contentState.isBottomOverlayDismissing
     }
 
     private func previewResizeBucket(for previewText: String) -> Int {
         guard self.shouldReservePreviewArea else { return 0 }
+        if self.shouldShowAIProcessingFailure { return 1 }
         let trimmed = previewText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return self.shouldShowProcessingStatus ? 1 : 0 }
 
@@ -2475,6 +2529,44 @@ struct BottomOverlayView: View {
         .help("Open Preferences")
     }
 
+    private func failureIconButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: max(self.layout.transFontSize - 1, 10), weight: .semibold))
+                .foregroundStyle(.white.opacity(0.86))
+                .frame(width: 20, height: 20)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.12))
+                )
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private var aiProcessingFailureView: some View {
+        HStack(spacing: 8) {
+            Text("AI Enhancement failed")
+                .font(.system(size: self.layout.transFontSize, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 4)
+
+            self.failureIconButton(systemName: "arrow.clockwise", help: "Try again") {
+                self.contentState.clearAIProcessingFailure()
+                self.contentState.onReprocessLastRequested?()
+            }
+
+            self.failureIconButton(systemName: "xmark", help: "Dismiss") {
+                self.contentState.clearAIProcessingFailure()
+                NotchOverlayManager.shared.hide()
+            }
+        }
+        .frame(maxWidth: self.previewMaxWidth, alignment: .leading)
+    }
+
     var body: some View {
         VStack(spacing: max(4, self.layout.vPadding / 2)) {
             if self.layout.showsTopControls {
@@ -2498,6 +2590,8 @@ struct BottomOverlayView: View {
                         Group {
                             if self.shouldSuppressPreviewDuringRelease {
                                 Color.clear
+                            } else if self.shouldShowAIProcessingFailure {
+                                self.aiProcessingFailureView
                             } else if self.shouldShowProcessingStatus {
                                 // Temporarily hidden; the waveform sweep carries processing state.
                                 // ShimmerText(
@@ -2554,6 +2648,8 @@ struct BottomOverlayView: View {
                         Group {
                             if self.shouldSuppressPreviewDuringRelease {
                                 Color.clear
+                            } else if self.shouldShowAIProcessingFailure {
+                                self.aiProcessingFailureView
                             } else if self.hasTranscription && !self.contentState.isProcessing {
                                 let previewText = self.transcriptionPreviewText
                                 if !previewText.isEmpty {
@@ -2748,6 +2844,10 @@ struct BottomOverlayView: View {
             if !self.layout.usesFixedCanvas {
                 self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
             }
+        }
+        .onChange(of: self.contentState.isAIProcessingFailureVisible) { _, _ in
+            guard !self.layout.usesFixedCanvas else { return }
+            self.refreshDynamicPreviewSizeIfNeeded(for: self.currentPreviewSizingText)
         }
         .onChange(of: self.processingStatusVisible) { _, _ in
             guard !self.layout.usesFixedCanvas else { return }
