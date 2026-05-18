@@ -307,6 +307,14 @@ final class FluidAudioProvider: TranscriptionProvider {
             DebugLogger.shared.info("ASR_BENCH provider_sliding_rejected reason=mid_word_period", source: "ASRBenchmark")
             return false
         }
+        guard !self.hasSuspiciousAdjacentPunctuation(cleaned) else {
+            DebugLogger.shared.info("ASR_BENCH provider_sliding_rejected reason=adjacent_punctuation", source: "ASRBenchmark")
+            return false
+        }
+        guard !self.hasRepeatedAdjacentPhrase(cleaned) else {
+            DebugLogger.shared.info("ASR_BENCH provider_sliding_rejected reason=repeated_phrase", source: "ASRBenchmark")
+            return false
+        }
         guard !self.latestStreamingPreviewText.isEmpty else { return true }
 
         let minimumLength = Int(Double(self.latestStreamingPreviewText.count) * 0.92)
@@ -326,6 +334,32 @@ final class FluidAudioProvider: TranscriptionProvider {
         for index in 1..<(chars.count - 1) where chars[index] == "." {
             if chars[index - 1].isLetter, chars[index + 1].isLetter {
                 return true
+            }
+        }
+        return false
+    }
+
+    private func hasSuspiciousAdjacentPunctuation(_ text: String) -> Bool {
+        text.contains(".,") || text.contains(",.") || text.contains("..")
+    }
+
+    private func hasRepeatedAdjacentPhrase(_ text: String) -> Bool {
+        let words = text
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        guard words.count >= 4 else { return false }
+
+        let maxPhraseLength = min(5, words.count / 2)
+        for phraseLength in 2...maxPhraseLength {
+            let maxStart = words.count - phraseLength * 2
+            guard maxStart >= 0 else { continue }
+            for start in 0...maxStart {
+                let first = words[start..<(start + phraseLength)]
+                let second = words[(start + phraseLength)..<(start + phraseLength * 2)]
+                if first.elementsEqual(second) {
+                    return true
+                }
             }
         }
         return false
