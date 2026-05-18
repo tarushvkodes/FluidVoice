@@ -1,5 +1,6 @@
 import Foundation
 #if arch(arm64)
+import AVFoundation
 import FluidAudio
 
 private actor DownloadProgressSink {
@@ -27,6 +28,11 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     private var streamingAsrManager: AsrManager?
     private var finalAsrManager: AsrManager?
+    private var slidingWindowManager: SlidingWindowAsrManager?
+    private var loadedModels: AsrModels?
+    private var streamedSampleCount: Int = 0
+    private var latestStreamingPreviewText: String = ""
+    private var vocabularyBundle: (vocabulary: CustomVocabularyContext, ctcModels: CtcModels)?
     private(set) var isReady: Bool = false
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
@@ -84,6 +90,7 @@ final class FluidAudioProvider: TranscriptionProvider {
             // Default to v3 (Multilingual)
             models = try await AsrModels.downloadAndLoad(version: .v3)
         }
+        self.loadedModels = models
         progressTicker.cancel()
         DebugLogger.shared.debug(
             "FluidAudioProvider: Models downloadAndLoad returned in \(String(format: "%.2f", Date().timeIntervalSince(loadStart)))s",
@@ -109,6 +116,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         if self.configureWordBoosting {
             do {
                 if let vocabBundle = try await ParakeetVocabularyStore.shared.loadTokenizedVocabularyBundle() {
+                    self.vocabularyBundle = vocabBundle
                     DebugLogger.shared.debug(
                         "FluidAudioProvider: Vocabulary bundle loaded with \(vocabBundle.vocabulary.terms.count) terms",
                         source: "FluidAudioProvider"
@@ -142,6 +150,9 @@ final class FluidAudioProvider: TranscriptionProvider {
 
         self.streamingAsrManager = streamingManager
         self.finalAsrManager = finalManager
+        self.slidingWindowManager = nil
+        self.streamedSampleCount = 0
+        self.latestStreamingPreviewText = ""
         await progressSink.emit(0.98)
 
         self.isReady = true
@@ -157,7 +168,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
-        guard let manager = self.streamingAsrManager else {
+        guard let fullPreviewManager = self.streamingAsrManager else {
             throw NSError(
                 domain: "FluidAudioProvider",
                 code: -1,
@@ -166,14 +177,21 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
 
         let startedAt = Date().timeIntervalSince1970
-        let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+        let slidingManager = try await self.ensureSlidingWindowManager()
+        let delta = try await self.consumeStreamingDelta(from: samples)
+        if !delta.isEmpty {
+            try await slidingManager.streamAudio(self.createPCMBuffer(from: delta))
+        }
+        let result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.latestStreamingPreviewText = text
         let elapsedMs = Int(((Date().timeIntervalSince1970 - startedAt) * 1000).rounded())
         let audioMs = Int((Double(samples.count) / 16_000.0 * 1000).rounded())
         let rtf = audioMs > 0 ? Double(elapsedMs) / Double(audioMs) : 0
         DebugLogger.shared.info(
             """
             ASR_BENCH provider_streaming_done samples=\(samples.count) audioMs=\(audioMs) \
-            elapsedMs=\(elapsedMs) textChars=\(result.text.trimmingCharacters(in: .whitespacesAndNewlines).count) \
+            elapsedMs=\(elapsedMs) textChars=\(text.trimmingCharacters(in: .whitespacesAndNewlines).count) \
             rtf=\(String(format: "%.3f", rtf))
             """,
             source: "ASRBenchmark"
@@ -188,6 +206,14 @@ final class FluidAudioProvider: TranscriptionProvider {
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"]
             )
+        }
+
+        let startedAt = Date().timeIntervalSince1970
+        if let slidingResult = try await self.finishSlidingWindowTranscription(samples),
+           self.shouldUseSlidingWindowFinal(slidingResult.text)
+        {
+            self.logFinalBenchmark(samples: samples, text: slidingResult.text, startedAt: startedAt, usedFallback: false)
+            return slidingResult
         }
 
         // If the boosted final manager fails, fall back to the unboosted streaming
@@ -210,6 +236,113 @@ final class FluidAudioProvider: TranscriptionProvider {
             self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: true)
             return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
         }
+    }
+
+    private func ensureSlidingWindowManager() async throws -> SlidingWindowAsrManager {
+        if let slidingWindowManager {
+            return slidingWindowManager
+        }
+        guard let loadedModels else {
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "ASR models not initialized"]
+            )
+        }
+
+        let manager = SlidingWindowAsrManager(config: .streaming)
+        if let vocabularyBundle {
+            try await manager.configureVocabularyBoosting(
+                vocabulary: vocabularyBundle.vocabulary,
+                ctcModels: vocabularyBundle.ctcModels
+            )
+        }
+        try await manager.start(models: loadedModels, source: .microphone)
+        self.slidingWindowManager = manager
+        self.streamedSampleCount = 0
+        self.latestStreamingPreviewText = ""
+        return manager
+    }
+
+    private func consumeStreamingDelta(from samples: [Float]) async throws -> [Float] {
+        if samples.count < self.streamedSampleCount {
+            await self.slidingWindowManager?.cancel()
+            self.slidingWindowManager = nil
+            self.streamedSampleCount = 0
+            self.latestStreamingPreviewText = ""
+        }
+
+        let delta = Array(samples.dropFirst(self.streamedSampleCount))
+        self.streamedSampleCount = samples.count
+        return delta
+    }
+
+    private func finishSlidingWindowTranscription(_ samples: [Float]) async throws -> ASRTranscriptionResult? {
+        guard let manager = self.slidingWindowManager else {
+            return nil
+        }
+
+        let delta = try await self.consumeStreamingDelta(from: samples)
+        if !delta.isEmpty {
+            try await manager.streamAudio(self.createPCMBuffer(from: delta))
+        }
+
+        let text = try await manager.finish()
+        self.slidingWindowManager = nil
+        self.streamedSampleCount = 0
+        return ASRTranscriptionResult(text: text, confidence: text.isEmpty ? 0 : 1)
+    }
+
+    private func shouldUseSlidingWindowFinal(_ text: String) -> Bool {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return false }
+        guard !self.hasSuspiciousMidWordPeriod(cleaned) else {
+            DebugLogger.shared.info("ASR_BENCH provider_sliding_rejected reason=mid_word_period", source: "ASRBenchmark")
+            return false
+        }
+        guard !self.latestStreamingPreviewText.isEmpty else { return true }
+
+        let minimumLength = Int(Double(self.latestStreamingPreviewText.count) * 0.92)
+        if cleaned.count < minimumLength {
+            DebugLogger.shared.info(
+                "ASR_BENCH provider_sliding_rejected reason=short slidingChars=\(cleaned.count) previewChars=\(self.latestStreamingPreviewText.count)",
+                source: "ASRBenchmark"
+            )
+            return false
+        }
+        return true
+    }
+
+    private func hasSuspiciousMidWordPeriod(_ text: String) -> Bool {
+        let chars = Array(text)
+        guard chars.count >= 3 else { return false }
+        for index in 1..<(chars.count - 1) where chars[index] == "." {
+            if chars[index - 1].isLetter, chars[index + 1].isLetter {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func createPCMBuffer(from samples: [Float]) throws -> AVAudioPCMBuffer {
+        guard
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
+            let channelData = buffer.floatChannelData
+        else {
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create audio buffer for sliding-window ASR"]
+            )
+        }
+
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { samplePtr in
+            guard let baseAddress = samplePtr.baseAddress else { return }
+            channelData[0].update(from: baseAddress, count: samples.count)
+        }
+        return buffer
     }
 
     private func logFinalBenchmark(samples: [Float], text: String, startedAt: TimeInterval, usedFallback: Bool) {
