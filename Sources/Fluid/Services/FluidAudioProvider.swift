@@ -210,11 +210,11 @@ final class FluidAudioProvider: TranscriptionProvider {
 
         let startedAt = Date().timeIntervalSince1970
         do {
-            if let slidingResult = try await self.finishSlidingWindowTranscription(samples),
-               self.shouldUseSlidingWindowFinal(slidingResult.text)
-            {
-                self.logFinalBenchmark(samples: samples, text: slidingResult.text, startedAt: startedAt, usedFallback: false)
-                return slidingResult
+            if let slidingResult = try await self.finishSlidingWindowTranscription(samples) {
+                if self.shouldUseSlidingWindowFinal(slidingResult.text) {
+                    self.logFinalBenchmark(samples: samples, text: slidingResult.text, startedAt: startedAt, usedFallback: false)
+                    return slidingResult
+                }
             }
         } catch {
             DebugLogger.shared.warning(
@@ -315,6 +315,10 @@ final class FluidAudioProvider: TranscriptionProvider {
             DebugLogger.shared.info("ASR_BENCH provider_sliding_rejected reason=repeated_phrase", source: "ASRBenchmark")
             return false
         }
+        guard !self.hasRepeatedAdjacentClauseOpening(cleaned) else {
+            DebugLogger.shared.info("ASR_BENCH provider_sliding_rejected reason=repeated_clause_opening", source: "ASRBenchmark")
+            return false
+        }
         guard !self.latestStreamingPreviewText.isEmpty else { return true }
 
         let minimumLength = Int(Double(self.latestStreamingPreviewText.count) * 0.92)
@@ -360,6 +364,28 @@ final class FluidAudioProvider: TranscriptionProvider {
                 if first.elementsEqual(second) {
                     return true
                 }
+            }
+        }
+        return false
+    }
+
+    private func hasRepeatedAdjacentClauseOpening(_ text: String) -> Bool {
+        let clauses = text
+            .lowercased()
+            .split { ".;,!?".contains($0) }
+            .map { clause in
+                clause
+                    .split { !$0.isLetter && !$0.isNumber }
+                    .map(String.init)
+            }
+            .filter { $0.count >= 2 }
+
+        guard clauses.count >= 2 else { return false }
+        for index in 1..<clauses.count {
+            let previous = clauses[index - 1]
+            let current = clauses[index]
+            if previous.prefix(2).elementsEqual(current.prefix(2)) {
+                return true
             }
         }
         return false
