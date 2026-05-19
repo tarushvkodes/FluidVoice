@@ -30,7 +30,9 @@ final class FluidAudioProvider: TranscriptionProvider {
     private var latestStreamingPreviewText: String = ""
     private var latestStreamingPreviewSampleCount: Int = 0
     private var latestStreamingPreviewFinishedAt: TimeInterval?
+    private let fastPreviewMinimumSamples = 32_000
     private let fastPreviewTailSilenceRMS: Float = 0.002
+    private let fastPreviewTailAudioToleranceMs = 300
     private(set) var isReady: Bool = false
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
@@ -281,12 +283,8 @@ final class FluidAudioProvider: TranscriptionProvider {
             self.logFastPreviewMiss(reason: "stale", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
             return nil
         }
-        guard finalSampleCount >= 80_000 else {
+        guard finalSampleCount >= self.fastPreviewMinimumSamples else {
             self.logFastPreviewMiss(reason: "short_recording", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
-            return nil
-        }
-        guard finalSampleCount <= 480_000 else {
-            self.logFastPreviewMiss(reason: "long_recording", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
             return nil
         }
         guard coverage >= 0.88 else {
@@ -297,7 +295,7 @@ final class FluidAudioProvider: TranscriptionProvider {
             self.logFastPreviewMiss(reason: "large_tail", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
             return nil
         }
-        guard tailSamples == 0 || tailRMS <= self.fastPreviewTailSilenceRMS else {
+        guard tailSamples == 0 || tailMs <= self.fastPreviewTailAudioToleranceMs || tailRMS <= self.fastPreviewTailSilenceRMS else {
             self.logFastPreviewMiss(reason: "tail_has_audio", tailMs: tailMs, coverage: coverage, ageMs: ageMs, tailRMS: tailRMS)
             return nil
         }
