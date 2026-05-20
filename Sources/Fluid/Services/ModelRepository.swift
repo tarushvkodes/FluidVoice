@@ -79,7 +79,7 @@ final class ModelRepository {
     /// Returns the display name for a provider ID
     func displayName(for providerID: String) -> String {
         switch providerID {
-        case "fluid-1": return "Fluid-1"
+        case "fluid-1": return "Fluid Intelligence"
         case "openai": return "OpenAI"
         case "anthropic": return "Anthropic"
         case "xai": return "xAI"
@@ -151,7 +151,7 @@ final class ModelRepository {
         appleIntelligenceDisabledReason: String? = nil
     ) -> [(id: String, name: String)] {
         var list: [(id: String, name: String)] = [
-            ("fluid-1", "Fluid-1"),
+            ("fluid-1", "Fluid Intelligence"),
             ("openai", "OpenAI"),
             ("anthropic", "Anthropic"),
             ("xai", "xAI"),

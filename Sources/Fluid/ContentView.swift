@@ -2973,7 +2973,7 @@ extension ContentView {
 
         if Fluid1PromptFormat.isAvailable(settings: settings) {
             self.promptModeOverrideText = nil
-            NotchContentState.shared.promptModeOverrideProfileName = "Fluid-1"
+            NotchContentState.shared.promptModeOverrideProfileName = "Fluid Intelligence"
             NotchContentState.shared.promptModeOverrideProfileID = Fluid1PromptFormat.promptSelectionID
             return
         }
@@ -2985,7 +2985,7 @@ extension ContentView {
             NotchContentState.shared.promptModeOverrideProfileID = nil
         case .fluid1:
             self.promptModeOverrideText = nil
-            NotchContentState.shared.promptModeOverrideProfileName = "Fluid-1"
+            NotchContentState.shared.promptModeOverrideProfileName = "Fluid Intelligence"
             NotchContentState.shared.promptModeOverrideProfileID = Fluid1PromptFormat.promptSelectionID
         case let .profile(profileID):
             guard let profile = settings.selectedDictationPromptProfile(for: slot) ?? settings.dictationPromptProfiles.first(where: {

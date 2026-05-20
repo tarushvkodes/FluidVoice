@@ -1398,7 +1398,7 @@ private struct BottomOverlayPromptMenuView: View {
             self.onDismissRequested()
         }) {
             HStack {
-                Text("Fluid-1")
+                Text("Fluid Intelligence")
                 Spacer()
                 if isSelected {
                     Image(systemName: "checkmark")
@@ -1412,7 +1412,7 @@ private struct BottomOverlayPromptMenuView: View {
         .buttonStyle(.plain)
         .disabled(!isAvailable)
         .opacity(isAvailable ? 1 : 0.45)
-        .help(isAvailable ? "Use Fluid-1 trained prompt format" : "Select a Fluid-1 model to enable this prompt")
+        .help(isAvailable ? "Use Fluid Intelligence" : "Select Fluid Intelligence to enable this prompt")
         .onHover { hovering in
             self.hoveredRowID = hovering && isAvailable ? "fluid-1" : nil
         }

@@ -191,6 +191,15 @@ extension AIEnhancementSettingsView {
     private var promptProcessingControl: some View {
         let isFluid1Locked = self.viewModel.isFluid1ModelSelected()
         let isOff = isFluid1Locked ? false : self.viewModel.isPrimaryDictationPromptSelectionOff()
+        let helpText: String = {
+            if isFluid1Locked {
+                return "Fluid Intelligence selected. AI Enhancement uses the Fluid Intelligence prompt."
+            }
+            if isOff {
+                return "Off: dictation types the raw transcript. Prompts and app overrides are paused."
+            }
+            return "On: dictation follows the selected prompt scope."
+        }()
 
         return HStack(alignment: .center, spacing: 7) {
             Text("AI Enhancement")
@@ -200,7 +209,7 @@ extension AIEnhancementSettingsView {
 
             self.cleanupSegmentedControl(isOff: isOff, mode: .dictate, isEnabled: !isFluid1Locked)
         }
-        .help(isFluid1Locked ? "Fluid-1 model selected. AI Enhancement uses the trained Fluid prompt." : (isOff ? "Off: dictation types the raw transcript. Prompts and app overrides are paused." : "On: dictation follows the selected prompt scope."))
+        .help(helpText)
     }
 
     private var promptModeTabSelector: some View {
@@ -318,10 +327,10 @@ extension AIEnhancementSettingsView {
                     if mode.normalized == .dictate {
                         self.promptProfileCard(
                             cardKey: "\(mode.normalized.rawValue)-fluid-1",
-                            title: "Fluid-1",
+                            title: "Fluid Intelligence",
                             subtitle: isFluid1Locked
-                                ? "Uses the trained Fluid-1 prompt format. Works well with Fluid models only."
-                                : "Works well with Fluid models only. Select a Fluid-1 model to enable.",
+                                ? "Uses the Fluid Intelligence prompt."
+                                : "Select Fluid Intelligence to enable.",
                             mode: mode,
                             isSelected: self.viewModel.isFluid1PromptSelected(),
                             onUse: {
@@ -360,7 +369,7 @@ extension AIEnhancementSettingsView {
                 }
 
                 if isFluid1Locked {
-                    Text("Fluid-1 model selected. Prompt choices are locked until you change model or provider.")
+                    Text("Fluid Intelligence selected. Prompt choices are locked until you change model or provider.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)

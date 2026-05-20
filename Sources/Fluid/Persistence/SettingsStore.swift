@@ -459,7 +459,7 @@ final class SettingsStore: ObservableObject {
     }
 
     func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
-        if Fluid1PromptFormat.isAvailable(settings: self) { return "Fluid-1" }
+        if Fluid1PromptFormat.isAvailable(settings: self) { return "Fluid Intelligence" }
 
         switch self.dictationPromptSelection(for: slot) {
         case .off:
@@ -470,7 +470,7 @@ final class SettingsStore: ObservableObject {
                 return name.isEmpty ? "Untitled" : name
             }
             return "Default"
-        case .fluid1: return "Fluid-1"
+        case .fluid1: return "Fluid Intelligence"
         case let .profile(promptID):
             guard let profile = self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate }) else {
                 return "Default"

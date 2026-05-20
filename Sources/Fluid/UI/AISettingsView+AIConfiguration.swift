@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Conditional Drawing Group Modifier
 
@@ -319,7 +320,7 @@ extension AIEnhancementSettingsView {
                     }
                     .padding(4)
                 }
-                .onChange(of: self.expandedProviderID) { newID in
+                .onChange(of: self.expandedProviderID) { _, newID in
                     if let id = newID {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(id, anchor: .top)
@@ -410,13 +411,13 @@ extension AIEnhancementSettingsView {
 
     private func providerCard(_ item: ProviderItem) -> some View {
         let isAppleDisabled = item.id == "apple-intelligence-disabled"
-        let isFluidInterest = item.id == "fluid-1"
+        let isFluidIntelligence = item.id == "fluid-1"
         let isComingSoon = isAppleDisabled
         let isExpanded = self.expandedProviderID == item.id && !isAppleDisabled
         let status = self.providerStatus(for: item)
         let borderColor = isExpanded
             ? self.theme.palette.accent.opacity(0.5)
-            : (isFluidInterest ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.3))
+            : (isFluidIntelligence ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.3))
         let statusView = HStack(spacing: 5) {
             if !status.icon.isEmpty {
                 Image(systemName: status.icon)
@@ -438,7 +439,7 @@ extension AIEnhancementSettingsView {
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(isComingSoon ? self.theme.palette.accent : self.theme.palette.primaryText)
 
-                        if isFluidInterest {
+                        if isFluidIntelligence {
                             statusView
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
@@ -476,8 +477,8 @@ extension AIEnhancementSettingsView {
                     .background(self.theme.palette.separator.opacity(0.5))
                     .padding(.horizontal, 14)
 
-                if isFluidInterest {
-                    self.fluid1InterestSection
+                if isFluidIntelligence {
+                    self.fluidIntelligenceRuntimeSection
                         .padding(14)
                         .padding(.top, 4)
                 } else {
@@ -501,11 +502,15 @@ extension AIEnhancementSettingsView {
 
     private func providerStatus(for item: ProviderItem) -> (text: String, color: Color, icon: String) {
         if item.id == "fluid-1" {
-            let hasInterest = self.settings.fluid1InterestCaptured
-            if hasInterest {
-                return ("Thanks · Coming soon", self.theme.palette.accent, "checkmark.circle.fill")
+            let path = self.fluidIntelligenceLocalModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                let expanded = NSString(string: path).expandingTildeInPath
+                if FileManager.default.fileExists(atPath: expanded) {
+                    return ("Local model ready", Color.fluidGreen, "checkmark.circle.fill")
+                }
+                return ("Model path missing", .orange, "exclamationmark.triangle.fill")
             }
-            return ("Early access · Tap to join", self.theme.palette.accent, "hand.tap")
+            return ("Add GGUF model", .orange, "externaldrive.badge.plus")
         }
         if item.id == "apple-intelligence-disabled" {
             return ("Unavailable", .secondary, "lock.slash")
@@ -530,15 +535,6 @@ extension AIEnhancementSettingsView {
     }
 
     private func toggleProviderExpansion(_ providerID: String) {
-        if providerID == "fluid-1" {
-            if self.expandedProviderID == providerID {
-                self.expandedProviderID = nil
-            } else {
-                self.expandedProviderID = providerID
-                self.fluid1InterestErrorMessage = ""
-            }
-            return
-        }
         if self.expandedProviderID == providerID {
             self.expandedProviderID = nil
             self.viewModel.showingEditProvider = false
@@ -551,73 +547,62 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private var fluid1InterestSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            let hasInterest = self.settings.fluid1InterestCaptured
-            if hasInterest {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(self.theme.palette.accent)
-                    Text("Thank you — coming soon")
-                        .font(.system(size: 13, weight: .semibold))
-                }
+    private var fluidIntelligenceRuntimeSection: some View {
+        let path = self.fluidIntelligenceLocalModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expandedPath = NSString(string: path).expandingTildeInPath
+        let hasPath = !path.isEmpty
+        let pathExists = hasPath && FileManager.default.fileExists(atPath: expandedPath)
 
-                Text("We saved your interest in Fluid-1, our private on-device model. We'll notify you when it's ready.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "envelope.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(self.theme.palette.accent)
-                    Text("Join Fluid-1 early access")
-                        .font(.system(size: 13, weight: .semibold))
-                }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: pathExists ? "checkmark.circle.fill" : "externaldrive")
+                    .font(.system(size: 13))
+                    .foregroundStyle(pathExists ? Color.fluidGreen : self.theme.palette.accent)
+                Text(pathExists ? "Local runtime ready" : "Local GGUF model")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
 
-                Text("Share your email to get notified when our private on-device model is ready.")
-                    .font(.caption)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("GGUF Model Path")
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Email")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    TextField("you@example.com", text: self.$fluid1InterestEmail)
+                HStack(alignment: .center, spacing: 8) {
+                    TextField("/path/to/model.gguf", text: self.$fluidIntelligenceLocalModelPath)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 13))
-                        .onChange(of: self.fluid1InterestEmail) { _, _ in
-                            if !self.fluid1InterestErrorMessage.isEmpty {
-                                self.fluid1InterestErrorMessage = ""
-                            }
+                        .font(.system(size: 13, design: .monospaced))
+                        .onChange(of: self.fluidIntelligenceLocalModelPath) { _, newValue in
+                            self.persistFluidIntelligenceModelPath(newValue)
                         }
-                }
 
-                HStack(spacing: 10) {
-                    Button(action: { self.submitFluid1Interest() }) {
-                        HStack(spacing: 6) {
-                            if self.fluid1InterestIsSubmitting {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .fixedSize()
-                            } else {
-                                Image(systemName: "paperplane.fill")
-                                    .font(.system(size: 11))
-                            }
-                            Text("Join early access")
-                                .font(.system(size: 12, weight: .medium))
-                        }
+                    Button(action: { self.chooseFluidIntelligenceModelPath() }) {
+                        Label("Choose", systemImage: "folder")
+                            .font(.system(size: 12, weight: .medium))
                     }
                     .buttonStyle(GlassButtonStyle(height: AISettingsLayout.controlHeight))
-                    .disabled(self.fluid1InterestIsSubmitting)
-                }
 
-                if !self.fluid1InterestErrorMessage.isEmpty {
-                    Text(self.fluid1InterestErrorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    if hasPath {
+                        Button(action: { self.fluidIntelligenceLocalModelPath = "" }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(CompactButtonStyle())
+                        .frame(width: 30, height: 30)
+                        .help("Clear model path")
+                    }
                 }
             }
+
+            HStack(spacing: 6) {
+                Image(systemName: pathExists ? "checkmark.shield.fill" : "info.circle")
+                    .font(.caption)
+                Text(pathExists ? expandedPath : "Runtime framework is bundled; model file stays external.")
+                    .font(.caption)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            .foregroundStyle(pathExists ? Color.fluidGreen : .secondary)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -631,95 +616,25 @@ extension AIEnhancementSettingsView {
         )
     }
 
-    private func submitFluid1Interest() {
-        guard !self.settings.fluid1InterestCaptured else { return }
-        let email = self.fluid1InterestEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !email.isEmpty else {
-            self.fluid1InterestErrorMessage = "Enter your email to join early access."
-            return
-        }
-        guard self.isValidEmail(email) else {
-            self.fluid1InterestErrorMessage = "Enter a valid email address."
-            return
-        }
-        self.fluid1InterestErrorMessage = ""
-        self.fluid1InterestIsSubmitting = true
-
-        Task {
-            let success = await self.sendFluid1Interest(email: email)
-            await MainActor.run {
-                self.fluid1InterestIsSubmitting = false
-                if success {
-                    self.settings.fluid1InterestCaptured = true
-                    self.fluid1InterestEmail = ""
-                } else {
-                    self.fluid1InterestErrorMessage = "We couldn't save your interest. Please try again."
-                }
-            }
-        }
+    private func chooseFluidIntelligenceModelPath() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
+        panel.prompt = "Choose"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        self.fluidIntelligenceLocalModelPath = url.path
     }
 
-    private func sendFluid1Interest(email: String) async -> Bool {
-        guard let url = URL(string: "https://altic.dev/api/fluid/fluid-model-interest") else {
-            DebugLogger.shared.error("Invalid Fluid-1 interest API URL", source: "AISettingsView")
-            return false
+    private func persistFluidIntelligenceModelPath(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: FluidIntelligenceIntegrationService.localModelPathDefaultsKey)
+        } else {
+            UserDefaults.standard.set(trimmed, forKey: FluidIntelligenceIntegrationService.localModelPathDefaultsKey)
         }
-
-        let payload: [String: Any] = [
-            "emailId": email,
-            "modelName": "Fluid-1",
-        ]
-
-        guard JSONSerialization.isValidJSONObject(payload) else { return false }
-
-        do {
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                let success = (200...299).contains(httpResponse.statusCode)
-                if success {
-                    DebugLogger.shared.info("Fluid-1 interest submitted", source: "AISettingsView")
-                } else {
-                    DebugLogger.shared.error(
-                        "Fluid-1 interest submission failed with status: \(httpResponse.statusCode)",
-                        source: "AISettingsView"
-                    )
-                }
-                return success
-            }
-            return false
-        } catch {
-            DebugLogger.shared.error(
-                "Network error submitting Fluid-1 interest: \(error.localizedDescription)",
-                source: "AISettingsView"
-            )
-            return false
-        }
-    }
-
-    private func isValidEmail(_ email: String) -> Bool {
-        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.contains("@") else { return false }
-        let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
-        guard parts.count == 2 else { return false }
-
-        let local = String(parts[0])
-        let domain = String(parts[1])
-        guard !local.isEmpty, !domain.isEmpty else { return false }
-        guard !local.hasPrefix("."), !local.hasSuffix(".") else { return false }
-        guard !domain.hasPrefix("."), !domain.hasSuffix(".") else { return false }
-        guard !local.contains(".."), !domain.contains("..") else { return false }
-
-        let domainParts = domain.split(separator: ".", omittingEmptySubsequences: false)
-        guard domainParts.count >= 2 else { return false }
-        guard domainParts.allSatisfy({ !$0.isEmpty }) else { return false }
-        guard let tld = domainParts.last, tld.count >= 2 else { return false }
-
-        return true
+        self.viewModel.refreshProviderItems()
     }
 
     private func providerDetailsSection(for item: ProviderItem) -> AnyView {

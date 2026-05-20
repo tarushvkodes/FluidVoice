@@ -176,7 +176,7 @@ struct SettingsView: View {
             Picker("", selection: self.dictationPromptSelectionBinding(for: slot)) {
                 Text("Off").tag("__OFF__").disabled(fluid1Locked)
                 Text("Default").tag("__DEFAULT__").disabled(fluid1Locked)
-                Text("Fluid-1")
+                Text("Fluid Intelligence")
                     .tag(Fluid1PromptFormat.promptSelectionID)
                     .disabled(!fluid1Locked)
                 ForEach(profiles) { profile in

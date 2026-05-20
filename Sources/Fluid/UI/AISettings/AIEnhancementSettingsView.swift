@@ -7,9 +7,7 @@ struct AIEnhancementSettingsView: View {
     let theme: AppTheme
     @State var expandedProviderID: String? = nil
     @State var providerSearchText: String = ""
-    @State var fluid1InterestEmail: String = ""
-    @State var fluid1InterestErrorMessage: String = ""
-    @State var fluid1InterestIsSubmitting: Bool = false
+    @State var fluidIntelligenceLocalModelPath: String = FluidIntelligenceIntegrationService.configuredLocalModelPath ?? ""
     @State var hoveredPromptCardKey: String? = nil
     @State var selectedPromptMode: SettingsStore.PromptMode = .dictate
     @State var hoveredPromptModeKey: String? = nil

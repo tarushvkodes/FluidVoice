@@ -716,7 +716,7 @@ struct NotchExpandedView: View {
                     if promptMode.normalized == .dictate {
                         let fluid1Available = Fluid1PromptFormat.isAvailable(settings: self.settings)
                         self.promptMenuRow(
-                            "Fluid-1",
+                            "Fluid Intelligence",
                             rowID: "fluid-1",
                             isSelected: fluid1Locked || self.settings.dictationPromptSelection(for: activeDictationSlot) == .fluid1,
                             isEnabled: fluid1Available
