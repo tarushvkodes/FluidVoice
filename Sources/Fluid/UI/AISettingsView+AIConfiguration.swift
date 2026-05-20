@@ -6,8 +6,8 @@
 //
 
 import AppKit
+import FluidIntelligence
 import SwiftUI
-import UniformTypeIdentifiers
 
 // MARK: - Conditional Drawing Group Modifier
 
@@ -396,6 +396,14 @@ extension AIEnhancementSettingsView {
         let isBuiltIn: Bool
     }
 
+    private struct FluidIntelligenceModelStatus {
+        let title: String
+        let detail: String
+        let icon: String
+        let detailIcon: String
+        let color: Color
+    }
+
     // Use cached provider items from ViewModel for scroll performance
     private var verifiedProviderItems: [ProviderItem] {
         self.viewModel.cachedVerifiedProviderItems.map {
@@ -502,15 +510,17 @@ extension AIEnhancementSettingsView {
 
     private func providerStatus(for item: ProviderItem) -> (text: String, color: Color, icon: String) {
         if item.id == "fluid-1" {
-            let path = self.fluidIntelligenceLocalModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !path.isEmpty {
-                let expanded = NSString(string: path).expandingTildeInPath
-                if FileManager.default.fileExists(atPath: expanded) {
-                    return ("Local model ready", Color.fluidGreen, "checkmark.circle.fill")
-                }
-                return ("Model path missing", .orange, "exclamationmark.triangle.fill")
+            let model = self.selectedFluidIntelligenceModel
+            if FluidIntelligenceIntegrationService.isModelInstalled(model) {
+                return ("\(model.parameterCount) ready", Color.fluidGreen, "checkmark.circle.fill")
             }
-            return ("Add GGUF model", .orange, "externaldrive.badge.plus")
+            if FluidIntelligenceIntegrationService.isLocalRuntimeConfigured {
+                return ("Local override ready", Color.fluidGreen, "checkmark.circle.fill")
+            }
+            if model.canDownload {
+                return ("Download available", self.theme.palette.accent, "arrow.down.circle.fill")
+            }
+            return ("Model not installed", .orange, "externaldrive.badge.questionmark")
         }
         if item.id == "apple-intelligence-disabled" {
             return ("Unavailable", .secondary, "lock.slash")
@@ -548,61 +558,68 @@ extension AIEnhancementSettingsView {
     }
 
     private var fluidIntelligenceRuntimeSection: some View {
-        let path = self.fluidIntelligenceLocalModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let expandedPath = NSString(string: path).expandingTildeInPath
-        let hasPath = !path.isEmpty
-        let pathExists = hasPath && FileManager.default.fileExists(atPath: expandedPath)
+        let model = self.selectedFluidIntelligenceModel
+        let status = self.fluidIntelligenceModelStatus(for: model)
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: pathExists ? "checkmark.circle.fill" : "externaldrive")
+                Image(systemName: status.icon)
                     .font(.system(size: 13))
-                    .foregroundStyle(pathExists ? Color.fluidGreen : self.theme.palette.accent)
-                Text(pathExists ? "Local runtime ready" : "Local GGUF model")
+                    .foregroundStyle(status.color)
+                Text(status.title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("GGUF Model Path")
+                Text("Model")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
 
-                HStack(alignment: .center, spacing: 8) {
-                    TextField("/path/to/model.gguf", text: self.$fluidIntelligenceLocalModelPath)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 13, design: .monospaced))
-                        .onChange(of: self.fluidIntelligenceLocalModelPath) { _, newValue in
-                            self.persistFluidIntelligenceModelPath(newValue)
-                        }
-
-                    Button(action: { self.chooseFluidIntelligenceModelPath() }) {
-                        Label("Choose", systemImage: "folder")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .buttonStyle(GlassButtonStyle(height: AISettingsLayout.controlHeight))
-
-                    if hasPath {
-                        Button(action: { self.fluidIntelligenceLocalModelPath = "" }) {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        .buttonStyle(CompactButtonStyle())
-                        .frame(width: 30, height: 30)
-                        .help("Clear model path")
+                Picker("Model", selection: self.$fluidIntelligenceSelectedModelID) {
+                    ForEach(FluidModelRegistry.models) { model in
+                        Text(model.displayName)
+                            .tag(model.id)
                     }
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: 280, alignment: .leading)
+                .onChange(of: self.fluidIntelligenceSelectedModelID) { _, newValue in
+                    self.persistFluidIntelligenceModelSelection(newValue)
+                }
+
+                Text(model.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 6) {
-                Image(systemName: pathExists ? "checkmark.shield.fill" : "info.circle")
+                Image(systemName: status.detailIcon)
                     .font(.caption)
-                Text(pathExists ? expandedPath : "Runtime framework is bundled; model file stays external.")
+                Text(status.detail)
                     .font(.caption)
                     .lineLimit(2)
-                    .truncationMode(.middle)
             }
-            .foregroundStyle(pathExists ? Color.fluidGreen : .secondary)
+            .foregroundStyle(status.color)
+
+            HStack(spacing: 8) {
+                Button(action: { self.revealFluidIntelligenceModelFolder() }) {
+                    Label("Models Folder", systemImage: "folder")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(GlassButtonStyle(height: AISettingsLayout.controlHeight))
+
+                if !FluidIntelligenceIntegrationService.isModelInstalled(model) {
+                    Button(action: {}) {
+                        Label("Download", systemImage: "arrow.down.circle")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .buttonStyle(GlassButtonStyle(height: AISettingsLayout.controlHeight))
+                    .disabled(true)
+                    .help(model.canDownload ? "Download this model" : "Download URL is not configured yet")
+                }
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -616,23 +633,82 @@ extension AIEnhancementSettingsView {
         )
     }
 
-    private func chooseFluidIntelligenceModelPath() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
-        panel.prompt = "Choose"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        self.fluidIntelligenceLocalModelPath = url.path
+    private var selectedFluidIntelligenceModel: FluidRegisteredModel {
+        FluidModelRegistry.model(id: self.fluidIntelligenceSelectedModelID) ?? FluidModelRegistry.defaultModel
     }
 
-    private func persistFluidIntelligenceModelPath(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            UserDefaults.standard.removeObject(forKey: FluidIntelligenceIntegrationService.localModelPathDefaultsKey)
-        } else {
-            UserDefaults.standard.set(trimmed, forKey: FluidIntelligenceIntegrationService.localModelPathDefaultsKey)
+    private func fluidIntelligenceModelStatus(
+        for model: FluidRegisteredModel
+    ) -> FluidIntelligenceModelStatus {
+        if FluidIntelligenceIntegrationService.isModelInstalled(model) {
+            return FluidIntelligenceModelStatus(
+                title: "Local model ready",
+                detail: "\(model.displayName) is installed and will run through llama.swift.",
+                icon: "checkmark.circle.fill",
+                detailIcon: "checkmark.shield.fill",
+                color: Color.fluidGreen
+            )
+        }
+
+        if FluidIntelligenceIntegrationService.isLocalRuntimeConfigured {
+            return FluidIntelligenceModelStatus(
+                title: "Local override ready",
+                detail: "A local GGUF override is configured for this developer build.",
+                icon: "checkmark.circle.fill",
+                detailIcon: "checkmark.shield.fill",
+                color: Color.fluidGreen
+            )
+        }
+
+        if model.canDownload {
+            return FluidIntelligenceModelStatus(
+                title: "Download available",
+                detail: "This registry entry has a locked download artifact.",
+                icon: "arrow.down.circle.fill",
+                detailIcon: "arrow.down.circle",
+                color: self.theme.palette.accent
+            )
+        }
+
+        return FluidIntelligenceModelStatus(
+            title: "Model not installed",
+            detail: "Waiting for the Hugging Face URL/checksum to be locked in the registry.",
+            icon: "externaldrive.badge.questionmark",
+            detailIcon: "info.circle",
+            color: .orange
+        )
+    }
+
+    private func revealFluidIntelligenceModelFolder() {
+        let directoryURL = FluidIntelligenceIntegrationService.modelDirectoryURL
+        do {
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            NSWorkspace.shared.open(directoryURL)
+        } catch {
+            DebugLogger.shared.error(
+                "Failed to open Fluid Intelligence models folder: \(error.localizedDescription)",
+                source: "AISettingsView"
+            )
+        }
+    }
+
+    private func persistFluidIntelligenceModelSelection(_ value: String) {
+        let model = FluidModelRegistry.model(id: value) ?? FluidModelRegistry.defaultModel
+        let providerKey = self.viewModel.providerKey(for: "fluid-1")
+        let models = FluidModelRegistry.modelIDs()
+
+        self.fluidIntelligenceSelectedModelID = model.id
+        UserDefaults.standard.set(model.id, forKey: FluidIntelligenceIntegrationService.selectedModelDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: FluidIntelligenceIntegrationService.localModelPathDefaultsKey)
+
+        self.viewModel.availableModelsByProvider[providerKey] = models
+        self.viewModel.selectedModelByProvider[providerKey] = model.id
+        self.viewModel.settings.availableModelsByProvider = self.viewModel.availableModelsByProvider
+        self.viewModel.settings.selectedModelByProvider = self.viewModel.selectedModelByProvider
+
+        if self.viewModel.selectedProviderID == "fluid-1" {
+            self.viewModel.availableModels = models
+            self.viewModel.selectedModel = model.id
         }
         self.viewModel.refreshProviderItems()
     }

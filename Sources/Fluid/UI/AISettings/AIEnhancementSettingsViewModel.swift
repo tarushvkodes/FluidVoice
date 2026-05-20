@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CryptoKit
+import FluidIntelligence
 import Security
 import SwiftUI
 import UniformTypeIdentifiers
@@ -180,6 +181,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
         self.selectedModelByProvider = normalizedSel
         self.settings.selectedModelByProvider = normalizedSel
+        self.normalizeFluidIntelligenceModels()
 
         // Determine initial model list AND set baseURL BEFORE calling updateCurrentProvider
         if let saved = savedProviders.first(where: { $0.id == selectedProviderID }) {
@@ -232,9 +234,23 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         case "openai": return "OpenAI"
         case "groq": return "Groq"
         case "apple-intelligence": return "Apple Intelligence"
+        case "fluid-1": return "Fluid Intelligence"
         default:
             return self.savedProviders.first(where: { $0.id == providerID })?.name ?? providerID.capitalized
         }
+    }
+
+    private func normalizeFluidIntelligenceModels() {
+        let key = self.providerKey(for: "fluid-1")
+        let models = FluidModelRegistry.modelIDs()
+        let current = self.selectedModelByProvider[key] ?? ""
+        let selected = FluidModelRegistry.model(id: current)?.id ?? FluidIntelligenceIntegrationService.configuredModelID
+
+        self.availableModelsByProvider[key] = models
+        self.selectedModelByProvider[key] = selected
+        self.settings.availableModelsByProvider = self.availableModelsByProvider
+        self.settings.selectedModelByProvider = self.selectedModelByProvider
+        UserDefaults.standard.set(selected, forKey: FluidIntelligenceIntegrationService.selectedModelDefaultsKey)
     }
 
     func connectionStatus(for providerID: String) -> AIConnectionStatus {

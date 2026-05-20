@@ -7,7 +7,7 @@ struct AIEnhancementSettingsView: View {
     let theme: AppTheme
     @State var expandedProviderID: String? = nil
     @State var providerSearchText: String = ""
-    @State var fluidIntelligenceLocalModelPath: String = FluidIntelligenceIntegrationService.configuredLocalModelPath ?? ""
+    @State var fluidIntelligenceSelectedModelID: String = FluidIntelligenceIntegrationService.configuredModelID
     @State var hoveredPromptCardKey: String? = nil
     @State var selectedPromptMode: SettingsStore.PromptMode = .dictate
     @State var hoveredPromptModeKey: String? = nil
@@ -18,6 +18,7 @@ struct AIEnhancementSettingsView: View {
         self.aiConfigurationCard
             .onAppear {
                 self.viewModel.onAppear()
+                self.fluidIntelligenceSelectedModelID = FluidIntelligenceIntegrationService.configuredModelID
             }
             .onChange(of: self.viewModel.connectionStatus) { oldValue, newValue in
                 if oldValue == .success && newValue != .success {

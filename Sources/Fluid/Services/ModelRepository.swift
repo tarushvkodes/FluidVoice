@@ -7,6 +7,7 @@
 //  instead of maintaining their own hardcoded lists.
 //
 
+import FluidIntelligence
 import Foundation
 
 final class ModelRepository {
@@ -24,7 +25,7 @@ final class ModelRepository {
     func defaultModels(for providerID: String) -> [String] {
         switch providerID {
         case "fluid-1":
-            return ["fluid-1-preview"]
+            return FluidModelRegistry.modelIDs()
         case "openai":
             return ["gpt-4.1"]
         case "anthropic":
@@ -229,6 +230,10 @@ final class ModelRepository {
     ///   - apiKey: Optional API key for authentication
     /// - Returns: Array of model IDs sorted alphabetically
     func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
+        if providerID == "fluid-1" {
+            return FluidModelRegistry.modelIDs()
+        }
+
         let isAnthropic = providerID == "anthropic" || baseURL.contains("anthropic.com")
 
         // Construct the models endpoint URL

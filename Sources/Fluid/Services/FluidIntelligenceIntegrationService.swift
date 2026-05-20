@@ -3,6 +3,7 @@ import Foundation
 
 actor FluidIntelligenceIntegrationService {
     static let shared = FluidIntelligenceIntegrationService()
+    static let selectedModelDefaultsKey = "FluidIntelligenceSelectedModelID"
     static let localModelPathDefaultsKey = "FluidIntelligenceLocalModelPath"
 
     struct RuntimeConfiguration: Sendable, Equatable {
@@ -32,18 +33,84 @@ actor FluidIntelligenceIntegrationService {
 
     private init() {}
 
+    nonisolated static var configuredModelID: String {
+        let value = UserDefaults.standard.string(forKey: Self.selectedModelDefaultsKey)
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard FluidModelRegistry.model(id: trimmed) != nil else {
+            return FluidModelRegistry.defaultModelID
+        }
+        return trimmed
+    }
+
+    nonisolated static var selectedModel: FluidRegisteredModel {
+        FluidModelRegistry.model(id: configuredModelID) ?? FluidModelRegistry.defaultModel
+    }
+
     nonisolated static var configuredLocalModelPath: String? {
+        if let override = localModelPathOverride {
+            return override
+        }
+
+        return Self.localModelPath(for: Self.selectedModel)
+    }
+
+    nonisolated static var modelDirectoryURL: URL {
+        FluidModelStoreConfiguration.defaultDirectoryURL()
+    }
+
+    nonisolated static func expectedLocalModelURL(for model: FluidRegisteredModel) -> URL {
+        FluidModelRegistry.localModelURL(for: model, directoryURL: self.modelDirectoryURL)
+    }
+
+    nonisolated static func localModelPath(for model: FluidRegisteredModel) -> String? {
+        if let bundledPath = bundledModelPath(for: model) {
+            return bundledPath
+        }
+
+        let storeURL = Self.expectedLocalModelURL(for: model)
+        return FileManager.default.fileExists(atPath: storeURL.path) ? storeURL.path : nil
+    }
+
+    nonisolated static func isModelInstalled(_ model: FluidRegisteredModel) -> Bool {
+        self.localModelPath(for: model) != nil
+    }
+
+    private nonisolated static var localModelPathOverride: String? {
         let value = UserDefaults.standard.string(forKey: Self.localModelPathDefaultsKey)
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
 
     nonisolated static var isLocalRuntimeConfigured: Bool {
-        self.configuredLocalModelPath != nil
+        guard let path = self.configuredLocalModelPath else { return false }
+        let expanded = NSString(string: path).expandingTildeInPath
+        return FileManager.default.fileExists(atPath: expanded)
     }
 
     nonisolated static func shouldHandleDictation(model: String) -> Bool {
         self.isLocalRuntimeConfigured || Fluid1PromptFormat.matches(model: model)
+    }
+
+    private nonisolated static func bundledModelPath(for model: FluidRegisteredModel) -> String? {
+        let filename = model.artifact.filename
+        let name = (filename as NSString).deletingPathExtension
+        let fileExtension = (filename as NSString).pathExtension
+        var candidates: [URL] = []
+
+        if let resourceURL = Bundle.main.resourceURL {
+            candidates.append(resourceURL.appendingPathComponent(filename))
+            candidates.append(resourceURL.appendingPathComponent("Models", isDirectory: true).appendingPathComponent(filename))
+        }
+
+        if let direct = Bundle.main.url(forResource: name, withExtension: fileExtension) {
+            candidates.append(direct)
+        }
+
+        if let nested = Bundle.main.url(forResource: name, withExtension: fileExtension, subdirectory: "Models") {
+            candidates.append(nested)
+        }
+
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }?.path
     }
 
     func status(for runtime: RuntimeConfiguration) async -> FluidIntelligenceStatus {
@@ -121,6 +188,14 @@ actor FluidIntelligenceIntegrationService {
                     batchTokenLimit: LlamaSwiftRuntimeConfiguration.defaultBatchTokenLimit
                 )
             )
+        }
+
+        if runtime.selectedProviderID == "fluid-1" ||
+            runtime.providerKey == "fluid-1" ||
+            FluidModelRegistry.model(id: runtime.model) != nil
+        {
+            let modelName = FluidModelRegistry.model(id: runtime.model)?.displayName ?? runtime.model
+            throw FluidIntelligenceError.missingModel(modelName)
         }
 
         guard !runtime.model.isEmpty else {
