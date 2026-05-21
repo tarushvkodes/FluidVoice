@@ -2,12 +2,18 @@ import SwiftUI
 
 enum FluidIntelligenceModelLoadState: Equatable {
     case idle
+    case downloading(modelID: String)
     case loading(modelID: String)
     case loaded(modelID: String, latencyMilliseconds: Int?)
     case failed(modelID: String, message: String)
 
     func isLoading(_ modelID: String) -> Bool {
         if case .loading(modelID) = self { return true }
+        return false
+    }
+
+    func isDownloading(_ modelID: String) -> Bool {
+        if case .downloading(modelID) = self { return true }
         return false
     }
 

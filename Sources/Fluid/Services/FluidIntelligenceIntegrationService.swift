@@ -42,10 +42,7 @@ actor FluidIntelligenceIntegrationService {
     nonisolated static var configuredModelID: String {
         let value = UserDefaults.standard.string(forKey: Self.selectedModelDefaultsKey)
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard FluidModelRegistry.model(id: trimmed) != nil else {
-            return FluidModelRegistry.defaultModelID
-        }
-        return trimmed
+        return FluidModelRegistry.canonicalModelID(for: trimmed) ?? FluidModelRegistry.defaultModelID
     }
 
     nonisolated static var selectedModel: FluidRegisteredModel {
@@ -79,6 +76,11 @@ actor FluidIntelligenceIntegrationService {
 
     nonisolated static func isModelInstalled(_ model: FluidRegisteredModel) -> Bool {
         self.localModelPath(for: model) != nil
+    }
+
+    nonisolated static func prepareModel(_ model: FluidRegisteredModel) async throws -> URL {
+        let store = FluidModelRegistry.store(for: model, directoryURL: self.modelDirectoryURL)
+        return try await store.prepareModel()
     }
 
     private nonisolated static var localModelPathOverride: String? {

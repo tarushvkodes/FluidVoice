@@ -534,10 +534,12 @@ extension AIEnhancementSettingsView {
         let model = self.selectedFluidIntelligenceModel
         let status = self.fluidIntelligenceModelStatus(for: model)
         let isInstalled = FluidIntelligenceIntegrationService.isModelInstalled(model)
+        let isDownloading = self.fluidIntelligenceLoadState.isDownloading(model.id)
         let isLoading = self.fluidIntelligenceLoadState.isLoading(model.id)
         let isLoaded = self.fluidIntelligenceLoadState.isLoaded(model.id)
         let hasLoadFailure = self.fluidIntelligenceLoadState.failureMessage(for: model.id) != nil
         let isTesting = self.viewModel.isTestingConnection && self.viewModel.selectedProviderID == "fluid-1"
+        let isBusy = isDownloading || isLoading || isTesting
         let canVerify = isInstalled && !self.fluidIntelligenceSelectedModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -557,7 +559,7 @@ extension AIEnhancementSettingsView {
                     },
                     isRefreshing: false,
                     refreshEnabled: true,
-                    selectionEnabled: !isLoading && !isTesting,
+                    selectionEnabled: !isBusy,
                     controlWidth: 180,
                     controlHeight: 30
                 )
@@ -574,7 +576,7 @@ extension AIEnhancementSettingsView {
                 }
                 .buttonStyle(CompactButtonStyle(foreground: isLoaded ? Color.fluidGreen : nil))
                 .frame(width: 28, height: 28)
-                .disabled(!isInstalled || isLoading || isTesting)
+                .disabled(!isInstalled || isBusy)
                 .help("Load selected model")
 
                 Button(action: { self.unloadFluidIntelligenceModel() }) {
@@ -583,7 +585,7 @@ extension AIEnhancementSettingsView {
                 }
                 .buttonStyle(CompactButtonStyle())
                 .frame(width: 28, height: 28)
-                .disabled(isLoading || isTesting || !isLoaded)
+                .disabled(isBusy || !isLoaded)
                 .help("Unload selected model")
 
                 Button(action: { self.revealFluidIntelligenceModelFolder() }) {
@@ -595,18 +597,24 @@ extension AIEnhancementSettingsView {
                 .help("Open models folder")
 
                 if !isInstalled {
-                    Button(action: {}) {
-                        Image(systemName: "arrow.down.circle")
-                            .font(.system(size: 12, weight: .semibold))
+                    Button(action: { self.downloadFluidIntelligenceModel(model) }) {
+                        if isDownloading {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .fixedSize()
+                        } else {
+                            Image(systemName: "arrow.down.circle")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
                     }
                     .buttonStyle(CompactButtonStyle())
                     .frame(width: 28, height: 28)
-                    .disabled(true)
+                    .disabled(!model.canDownload || isBusy)
                     .help(model.canDownload ? "Download this model" : "Download URL is not configured yet")
                 }
             }
 
-            if isLoading || isLoaded || hasLoadFailure || !isInstalled {
+            if isDownloading || isLoading || isLoaded || hasLoadFailure || !isInstalled {
                 HStack(spacing: 6) {
                     Image(systemName: status.detailIcon)
                         .font(.caption)
@@ -651,7 +659,7 @@ extension AIEnhancementSettingsView {
                     }
                 }
                 .buttonStyle(AccentButtonStyle(compact: true))
-                .disabled(isTesting || isLoading)
+                .disabled(isBusy)
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle")
@@ -674,7 +682,7 @@ extension AIEnhancementSettingsView {
     private func refreshFluidIntelligenceProviderModels() {
         let providerKey = self.viewModel.providerKey(for: "fluid-1")
         let models = FluidModelRegistry.modelIDs()
-        let selected = FluidModelRegistry.model(id: self.fluidIntelligenceSelectedModelID)?.id ?? FluidModelRegistry.defaultModel.id
+        let selected = FluidModelRegistry.canonicalModelID(for: self.fluidIntelligenceSelectedModelID) ?? FluidModelRegistry.defaultModel.id
 
         self.fluidIntelligenceSelectedModelID = selected
         self.viewModel.availableModelsByProvider[providerKey] = models
@@ -689,6 +697,29 @@ extension AIEnhancementSettingsView {
 
         self.refreshFluidIntelligenceLoadState()
         self.viewModel.refreshProviderItems()
+    }
+
+    private func downloadFluidIntelligenceModel(_ model: FluidRegisteredModel) {
+        guard model.canDownload else {
+            self.fluidIntelligenceLoadState = .failed(modelID: model.id, message: "Download URL is not configured yet.")
+            return
+        }
+
+        self.fluidIntelligenceLoadState = .downloading(modelID: model.id)
+        Task { @MainActor in
+            do {
+                _ = try await FluidIntelligenceIntegrationService.prepareModel(model)
+                guard self.fluidIntelligenceSelectedModelID == model.id else { return }
+                self.fluidIntelligenceLoadState = .idle
+            } catch {
+                guard self.fluidIntelligenceSelectedModelID == model.id else { return }
+                self.fluidIntelligenceLoadState = .failed(
+                    modelID: model.id,
+                    message: Self.errorMessage(for: error)
+                )
+            }
+            self.viewModel.refreshProviderItems()
+        }
     }
 
     private func verifyFluidIntelligenceConnection(_ model: FluidRegisteredModel) {
@@ -717,6 +748,16 @@ extension AIEnhancementSettingsView {
     private func fluidIntelligenceModelStatus(
         for model: FluidRegisteredModel
     ) -> FluidIntelligenceModelStatus {
+        if self.fluidIntelligenceLoadState.isDownloading(model.id) {
+            return FluidIntelligenceModelStatus(
+                title: "Downloading model",
+                detail: "Downloading \(model.displayName). This can take a few minutes on first setup.",
+                icon: "arrow.down.circle.fill",
+                detailIcon: "arrow.down.circle.fill",
+                color: self.theme.palette.accent
+            )
+        }
+
         if self.fluidIntelligenceLoadState.isLoading(model.id) {
             return FluidIntelligenceModelStatus(
                 title: "Loading model",
@@ -897,7 +938,11 @@ extension AIEnhancementSettingsView {
         }
         self.viewModel.resetVerification(for: "fluid-1")
         self.viewModel.refreshProviderItems()
-        self.loadFluidIntelligenceModel(model)
+        if FluidIntelligenceIntegrationService.isModelInstalled(model) {
+            self.loadFluidIntelligenceModel(model)
+        } else {
+            self.fluidIntelligenceLoadState = .idle
+        }
     }
 
     private func providerDetailsSection(for item: ProviderItem) -> AnyView {
