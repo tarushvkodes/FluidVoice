@@ -611,12 +611,12 @@ struct CommandModeView: View {
 
     private func updateAvailableModels() {
         let currentProviderID = self.settings.effectiveCommandModeProviderID
-        let currentModel = self.settings.commandModeSelectedModel ?? "gpt-4.1"
+        let currentModel = self.settings.commandModeSelectedModel ?? ""
         self.availableModels = self.settings.commandModeModels(for: currentProviderID)
 
         // If current model not in list, select first available
         if !self.settings.commandModeLinkedToGlobal, !self.availableModels.contains(currentModel) {
-            self.settings.commandModeSelectedModel = self.availableModels.first ?? "gpt-4.1"
+            self.settings.commandModeSelectedModel = self.availableModels.first
         }
     }
 

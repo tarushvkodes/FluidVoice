@@ -40,13 +40,15 @@ extension SettingsStore {
            self.supportedCommandModeProviderID(self.selectedProviderID) == providerID
         {
             let key = ModelRepository.shared.providerKey(for: providerID)
-            return self.nonEmptyModel(self.selectedModelByProvider[key])
+            return self.providerScopedModel(self.selectedModelByProvider[key], in: models)
                 ?? self.providerScopedModel(self.selectedModel, in: models)
                 ?? models.first
-                ?? "gpt-4.1"
+                ?? ""
         }
 
-        return self.nonEmptyModel(self.commandModeSelectedModel) ?? models.first ?? "gpt-4.1"
+        return self.providerScopedModel(self.commandModeSelectedModel, in: models)
+            ?? models.first
+            ?? ""
     }
 
     var commandModeReadinessIssue: String? {
