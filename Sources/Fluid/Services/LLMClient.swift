@@ -18,15 +18,38 @@ enum LLMError: Error, LocalizedError {
         case .invalidResponse:
             return "Invalid response from LLM"
         case let .httpError(code, message):
-            return "HTTP \(code): \(message)"
+            return "HTTP \(code): \(message.trimmingCharacters(in: .whitespacesAndNewlines))"
         case let .networkError(error):
-            return "Network error: \(error.localizedDescription)"
+            return Self.userFacingNetworkMessage(from: error)
         case .encodingError:
             return "Failed to encode request"
         case let .timeout(seconds):
             return "Request timed out after \(Int(seconds)) seconds"
         case let .invalidRequest(message):
             return message
+        }
+    }
+
+    private static func userFacingNetworkMessage(from error: Error) -> String {
+        guard let urlError = error as? URLError else {
+            return "Network error: \(error.localizedDescription)"
+        }
+
+        switch urlError.code {
+        case .notConnectedToInternet:
+            return "Network error: no internet connection."
+        case .timedOut:
+            return "Network error: request timed out."
+        case .cannotFindHost:
+            return "Network error: could not find API host."
+        case .cannotConnectToHost:
+            return "Network error: could not connect to API host."
+        case .networkConnectionLost:
+            return "Network error: connection dropped during the request."
+        case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid:
+            return "Network error: TLS certificate validation failed."
+        default:
+            return "Network error: \(urlError.localizedDescription)"
         }
     }
 }
@@ -78,6 +101,13 @@ final class LLMClient {
             guard let value = arguments[key] as? String, !value.isEmpty else { return nil }
             return value
         }
+    }
+
+    private struct ResponsesToolCallAccumulator {
+        var id: String?
+        var callID: String?
+        var name: String?
+        var arguments: String = ""
     }
 
     // MARK: - Configuration
@@ -162,12 +192,15 @@ final class LLMClient {
         for attempt in 1...config.maxRetries {
             do {
                 if config.streaming {
+                    if self.isResponsesRequest(request) {
+                        return try await self.processResponsesStreaming(request: request, config: config)
+                    }
                     return try await self.processStreaming(request: request, config: config)
                 } else {
                     return try await self.processNonStreaming(request: request)
                 }
             } catch let error as URLError where self.isRetryableError(error) {
-                lastError = error
+                lastError = LLMError.networkError(error)
                 DebugLogger.shared.warning("LLMClient: Retry \(attempt)/\(config.maxRetries) due to \(error.code.rawValue)", source: "LLMClient")
                 if attempt < config.maxRetries {
                     // Exponential backoff
@@ -175,6 +208,8 @@ final class LLMClient {
                     try? await Task.sleep(nanoseconds: delayNs)
                     continue
                 }
+            } catch let error as URLError {
+                throw LLMError.networkError(error)
             } catch {
                 throw error // Non-retryable error
             }
@@ -195,21 +230,14 @@ final class LLMClient {
             throw LLMError.invalidURL
         }
 
-        let endpoint: String
-        if baseURL.contains("/chat/completions") ||
-            baseURL.contains("/api/chat") ||
-            baseURL.contains("/api/generate")
-        {
-            endpoint = baseURL
-        } else {
-            endpoint = self.appendingPath("chat/completions", to: baseURL)
-        }
+        let useResponsesAPI = self.shouldUseResponsesAPI(for: config, baseURL: baseURL)
+        let endpoint = self.endpoint(for: baseURL, useResponsesAPI: useResponsesAPI)
 
         guard let url = URL(string: endpoint) else {
             throw LLMError.invalidURL
         }
 
-        let body = self.buildChatCompletionsBody(config)
+        let body = useResponsesAPI ? self.buildResponsesBody(config) : self.buildChatCompletionsBody(config)
 
         // Serialize to JSON
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body, options: []) else {
@@ -240,6 +268,46 @@ final class LLMClient {
 
     private func appendingPath(_ path: String, to baseURL: String) -> String {
         baseURL.hasSuffix("/") ? "\(baseURL)\(path)" : "\(baseURL)/\(path)"
+    }
+
+    private func endpoint(for baseURL: String, useResponsesAPI: Bool) -> String {
+        if useResponsesAPI {
+            if baseURL.contains("/responses") {
+                return baseURL
+            }
+            if baseURL.contains("/chat/completions") {
+                return baseURL.replacingOccurrences(of: "/chat/completions", with: "/responses")
+            }
+            return self.appendingPath("responses", to: baseURL)
+        }
+
+        if baseURL.contains("/chat/completions") ||
+            baseURL.contains("/api/chat") ||
+            baseURL.contains("/api/generate")
+        {
+            return baseURL
+        }
+        return self.appendingPath("chat/completions", to: baseURL)
+    }
+
+    private func shouldUseResponsesAPI(for config: Config, baseURL: String) -> Bool {
+        if baseURL.contains("/responses") {
+            return true
+        }
+
+        guard let url = URL(string: baseURL),
+              url.host?.lowercased() == "api.openai.com"
+        else { return false }
+
+        let modelLower = config.model.lowercased()
+        return modelLower.hasPrefix("gpt-5") ||
+            modelLower.hasPrefix("o1") ||
+            modelLower.hasPrefix("o3") ||
+            modelLower.hasPrefix("o4")
+    }
+
+    private func isResponsesRequest(_ request: URLRequest) -> Bool {
+        request.url?.path.contains("/responses") == true
     }
 
     private func buildChatCompletionsBody(_ config: Config) -> [String: Any] {
@@ -287,6 +355,114 @@ final class LLMClient {
         return body
     }
 
+    private func buildResponsesBody(_ config: Config) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": config.model,
+            "input": self.responsesInput(from: config.messages),
+            "store": false,
+        ]
+
+        if config.streaming {
+            body["stream"] = true
+        }
+
+        if !config.tools.isEmpty {
+            body["tools"] = self.responsesTools(from: config.tools)
+            body["tool_choice"] = "auto"
+        }
+
+        if let tokens = config.maxTokens {
+            body["max_output_tokens"] = tokens
+        }
+
+        if let temp = config.temperature {
+            body["temperature"] = temp
+        }
+
+        for (key, value) in ThinkingParserFactory.getExtraParameters(for: config.model) {
+            self.addResponsesExtraParameter(name: key, value: value, to: &body)
+        }
+
+        for (key, value) in config.extraParameters {
+            self.addResponsesExtraParameter(name: key, value: value, to: &body)
+        }
+
+        return body
+    }
+
+    private func addResponsesExtraParameter(name: String, value: Any, to body: inout [String: Any]) {
+        if name == "reasoning_effort" {
+            body["reasoning"] = ["effort": value]
+        } else {
+            body[name] = value
+        }
+    }
+
+    private func responsesTools(from chatTools: [[String: Any]]) -> [[String: Any]] {
+        var tools: [[String: Any]] = []
+
+        for chatTool in chatTools {
+            guard chatTool["type"] as? String == "function",
+                  let function = chatTool["function"] as? [String: Any],
+                  let name = function["name"] as? String,
+                  let parameters = function["parameters"] as? [String: Any]
+            else { continue }
+
+            var tool: [String: Any] = [
+                "type": "function",
+                "name": name,
+                "parameters": parameters,
+                "strict": false,
+            ]
+            if let description = function["description"] as? String {
+                tool["description"] = description
+            }
+            tools.append(tool)
+        }
+
+        return tools
+    }
+
+    private func responsesInput(from messages: [[String: Any]]) -> [[String: Any]] {
+        var input: [[String: Any]] = []
+
+        for message in messages {
+            let role = message["role"] as? String ?? "user"
+
+            if role == "tool" {
+                input.append([
+                    "type": "function_call_output",
+                    "call_id": message["tool_call_id"] as? String ?? "call_unknown",
+                    "output": message["content"] as? String ?? "",
+                ])
+                continue
+            }
+
+            if let content = message["content"] as? String, !content.isEmpty {
+                input.append([
+                    "role": role,
+                    "content": content,
+                ])
+            }
+
+            guard let toolCalls = message["tool_calls"] as? [[String: Any]] else { continue }
+            for toolCall in toolCalls {
+                guard let function = toolCall["function"] as? [String: Any],
+                      let name = function["name"] as? String
+                else { continue }
+
+                input.append([
+                    "type": "function_call",
+                    "call_id": toolCall["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))",
+                    "name": name,
+                    "arguments": function["arguments"] as? String ?? "{}",
+                ])
+            }
+        }
+
+        return input
+    }
+
     // MARK: - Non-Streaming Response
 
     private func processNonStreaming(request: URLRequest) async throws -> Response {
@@ -306,12 +482,119 @@ final class LLMClient {
             throw LLMError.invalidResponse
         }
 
+        if self.isResponsesRequest(request) {
+            return try self.parseResponsesResponse(json)
+        }
+
         guard let choices = json["choices"] as? [[String: Any]],
               let choice = choices.first,
               let message = choice["message"] as? [String: Any]
         else { throw LLMError.invalidResponse }
 
         return self.parseMessageResponse(message)
+    }
+
+    private func processResponsesStreaming(request: URLRequest, config: Config) async throws -> Response {
+        DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
+
+        let (bytes, response) = try await self.session.bytes(for: request)
+
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+            }
+            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            throw LLMError.httpError(http.statusCode, errText)
+        }
+
+        var contentBuffer: [String] = []
+        var toolCallsByIndex: [Int: ResponsesToolCallAccumulator] = [:]
+
+        for try await rawLine in bytes.lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("data:") else { continue }
+
+            var jsonString = String(line.dropFirst(5))
+            if jsonString.hasPrefix(" ") {
+                jsonString = String(jsonString.dropFirst(1))
+            }
+            if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+                continue
+            }
+
+            guard let jsonData = jsonString.data(using: .utf8),
+                  let event = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let type = event["type"] as? String
+            else {
+                continue
+            }
+
+            switch type {
+            case "response.output_text.delta":
+                if let delta = event["delta"] as? String {
+                    contentBuffer.append(delta)
+                    config.onContentChunk?(delta)
+                }
+            case "response.output_item.added", "response.output_item.done":
+                guard let item = event["item"] as? [String: Any],
+                      item["type"] as? String == "function_call"
+                else { continue }
+                let index = event["output_index"] as? Int ?? 0
+                var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
+                call.id = item["id"] as? String ?? call.id
+                call.callID = item["call_id"] as? String ?? call.callID
+                call.name = item["name"] as? String ?? call.name
+                if let arguments = item["arguments"] as? String, !arguments.isEmpty {
+                    call.arguments = arguments
+                }
+                toolCallsByIndex[index] = call
+                if let name = call.name {
+                    config.onToolCallStart?(name)
+                }
+            case "response.function_call_arguments.delta":
+                let index = event["output_index"] as? Int ?? 0
+                var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
+                call.arguments += event["delta"] as? String ?? ""
+                toolCallsByIndex[index] = call
+            case "response.function_call_arguments.done":
+                let index = event["output_index"] as? Int ?? 0
+                var call = toolCallsByIndex[index] ?? ResponsesToolCallAccumulator()
+                call.id = event["item_id"] as? String ?? call.id
+                call.callID = event["call_id"] as? String ?? call.callID
+                call.name = event["name"] as? String ?? call.name
+                call.arguments = event["arguments"] as? String ?? call.arguments
+                if let item = event["item"] as? [String: Any] {
+                    call.id = item["id"] as? String ?? call.id
+                    call.callID = item["call_id"] as? String ?? call.callID
+                    call.name = item["name"] as? String ?? call.name
+                    call.arguments = item["arguments"] as? String ?? call.arguments
+                }
+                toolCallsByIndex[index] = call
+            default:
+                continue
+            }
+        }
+
+        let toolCalls = toolCallsByIndex.keys.sorted().compactMap { index -> ToolCall? in
+            guard let call = toolCallsByIndex[index],
+                  let name = call.name,
+                  let argsData = call.arguments.data(using: .utf8),
+                  let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
+            else { return nil }
+
+            return ToolCall(
+                id: call.callID ?? call.id ?? "call_\(UUID().uuidString.prefix(8))",
+                name: name,
+                arguments: args
+            )
+        }
+
+        return Response(
+            thinking: nil,
+            content: contentBuffer.joined().trimmingCharacters(in: .whitespacesAndNewlines),
+            toolCalls: toolCalls
+        )
     }
 
     private func processStreaming(request: URLRequest, config: Config) async throws -> Response {
@@ -511,6 +794,54 @@ final class LLMClient {
     }
 
     // MARK: - Parse Non-Streaming Message
+
+    private func parseResponsesResponse(_ json: [String: Any]) throws -> Response {
+        guard let output = json["output"] as? [[String: Any]] else {
+            throw LLMError.invalidResponse
+        }
+
+        var contentParts: [String] = []
+        var parsedToolCalls: [ToolCall] = []
+
+        for item in output {
+            switch item["type"] as? String {
+            case "message":
+                guard let content = item["content"] as? [[String: Any]] else { continue }
+                for part in content {
+                    if part["type"] as? String == "output_text",
+                       let text = part["text"] as? String
+                    {
+                        contentParts.append(text)
+                    }
+                }
+            case "function_call":
+                guard let name = item["name"] as? String,
+                      let argsString = item["arguments"] as? String,
+                      let argsData = argsString.data(using: .utf8),
+                      let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]
+                else { continue }
+
+                parsedToolCalls.append(
+                    ToolCall(
+                        id: item["call_id"] as? String ?? item["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))",
+                        name: name,
+                        arguments: args
+                    )
+                )
+            default:
+                continue
+            }
+        }
+
+        let rawContent = contentParts.joined()
+        let (thinking, cleanedContent) = self.stripThinkingTags(rawContent)
+
+        return Response(
+            thinking: thinking.isEmpty ? nil : thinking,
+            content: cleanedContent.isEmpty ? rawContent.trimmingCharacters(in: .whitespacesAndNewlines) : cleanedContent,
+            toolCalls: parsedToolCalls
+        )
+    }
 
     private func parseMessageResponse(_ message: [String: Any]) -> Response {
         // Extract content

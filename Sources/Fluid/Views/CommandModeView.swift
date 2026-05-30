@@ -491,17 +491,16 @@ struct CommandModeView: View {
                         .help("Use the same provider and model selected in AI Enhancement.")
 
                     SearchableProviderPicker(
-                        builtInProviders: self.builtInProvidersList,
-                        savedProviders: self.settings.savedProviders,
+                        builtInProviders: self.verifiedBuiltInProvidersList,
+                        savedProviders: self.verifiedSavedProviders,
                         selectedProviderID: Binding(
                             get: { self.settings.effectiveCommandModeProviderID },
                             set: { newValue in
                                 guard !self.settings.commandModeLinkedToGlobal else { return }
                                 if newValue == "apple-intelligence-disabled" || newValue == "apple-intelligence" {
-                                    self.settings.commandModeSelectedProviderID = "openai"
-                                } else {
-                                    self.settings.commandModeSelectedProviderID = newValue
+                                    return
                                 }
+                                self.settings.commandModeSelectedProviderID = newValue
                                 self.updateAvailableModels()
                             }
                         ),
@@ -627,6 +626,14 @@ struct CommandModeView: View {
             appleIntelligenceAvailable: false,
             appleIntelligenceDisabledReason: "No tools"
         )
+    }
+
+    private var verifiedBuiltInProvidersList: [(id: String, name: String)] {
+        self.builtInProvidersList.filter { self.settings.isCommandModeProviderVerified($0.id) }
+    }
+
+    private var verifiedSavedProviders: [SettingsStore.SavedProvider] {
+        self.settings.savedProviders.filter { self.settings.isCommandModeProviderVerified($0.id) }
     }
 }
 

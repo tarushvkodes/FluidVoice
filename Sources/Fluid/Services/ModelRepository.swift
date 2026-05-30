@@ -279,15 +279,10 @@ final class ModelRepository {
             throw FetchError.networkError(details: errorDetails)
         }
 
-        // Check for HTTP errors with detailed messages
+        // Check for HTTP errors and preserve the provider body for the UI.
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
             let bodyString = String(data: data, encoding: .utf8) ?? "<unable to decode response body>"
-            let errorDetails = self.interpretHTTPError(
-                statusCode: httpResponse.statusCode,
-                providerID: providerID,
-                responseBody: bodyString,
-                endpoint: urlString
-            )
+            let errorDetails = self.rawHTTPErrorDetails(responseBody: bodyString)
             DebugLogger.shared.error(
                 "fetchModels: HTTP \(httpResponse.statusCode) for '\(providerID)': \(errorDetails)\nResponse body: \(bodyString.prefix(500))",
                 source: "ModelRepository"
@@ -340,32 +335,9 @@ final class ModelRepository {
         throw FetchError.invalidResponse(details: "Unknown response format. Top-level keys: [\(topLevelKeys)]. Expected 'data' or 'models'.")
     }
 
-    /// Provides detailed interpretation of HTTP errors
-    private func interpretHTTPError(statusCode: Int, providerID: String, responseBody: String, endpoint: String) -> String {
-        let providerName = self.displayName(for: providerID)
-
-        switch statusCode {
-        case 400:
-            return "Bad Request - The request format was invalid. Check if the base URL '\(endpoint)' is correct for \(providerName)."
-        case 401:
-            if responseBody.lowercased().contains("invalid") || responseBody.lowercased().contains("api key") || responseBody.lowercased().contains("authentication") {
-                return "Invalid API Key - The API key for \(providerName) appears to be incorrect or expired. Please verify your API key."
-            }
-            return "Unauthorized - API key is missing or invalid for \(providerName). Double-check your API key."
-        case 403:
-            if responseBody.lowercased().contains("permission") || responseBody.lowercased().contains("access") {
-                return "Forbidden - Your API key doesn't have permission to list models for \(providerName). Check your account permissions."
-            }
-            return "Forbidden - Access denied for \(providerName). Your API key may lack the required permissions."
-        case 404:
-            return "Not Found - The /models endpoint doesn't exist at '\(endpoint)'. This provider may not support model listing, or the base URL is incorrect."
-        case 429:
-            return "Rate Limited - Too many requests to \(providerName). Wait a moment and try again."
-        case 500, 502, 503:
-            return "\(providerName) server error (HTTP \(statusCode)). The service may be temporarily unavailable."
-        default:
-            return "HTTP \(statusCode) from \(providerName). Check your API key and base URL configuration."
-        }
+    private func rawHTTPErrorDetails(responseBody: String) -> String {
+        let trimmed = responseBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "<empty response body>" : trimmed
     }
 
     /// Provides detailed network error messages

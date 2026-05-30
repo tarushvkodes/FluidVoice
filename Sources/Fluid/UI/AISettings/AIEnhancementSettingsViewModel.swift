@@ -56,6 +56,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var connectionStatus: AIConnectionStatus = .unknown
     @Published var connectionErrorMessage: String = ""
     @Published var connectionStatusByProvider: [String: AIConnectionStatus] = [:]
+    @Published var connectionErrorMessageByProvider: [String: String] = [:]
     @Published var fetchedModelsProviders: Set<String> = []
     @Published var editingAPIKeyProviders: Set<String> = []
 
@@ -270,6 +271,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.connectionStatusByProvider[providerID] ?? .unknown
     }
 
+    func connectionErrorMessage(for providerID: String) -> String {
+        self.connectionErrorMessageByProvider[providerID] ?? ""
+    }
+
     // MARK: - Provider Items Cache (for scroll performance)
 
     /// Refreshes the cached provider items. Call this when providers or connection status changes.
@@ -303,11 +308,28 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func updateConnectionStatus(_ status: AIConnectionStatus, for providerID: String) {
         self.connectionStatusByProvider[providerID] = status
+        if status != .failed {
+            self.clearConnectionError(for: providerID)
+        }
         if providerID == self.selectedProviderID {
             self.connectionStatus = status
         }
         // Refresh cached lists when verification status changes
         self.refreshProviderItems()
+    }
+
+    private func setConnectionError(_ message: String, for providerID: String) {
+        self.connectionErrorMessageByProvider[providerID] = message
+        if providerID == self.selectedProviderID {
+            self.connectionErrorMessage = message
+        }
+    }
+
+    private func clearConnectionError(for providerID: String) {
+        self.connectionErrorMessageByProvider.removeValue(forKey: providerID)
+        if providerID == self.selectedProviderID {
+            self.connectionErrorMessage = ""
+        }
     }
 
     func verifyAppleIntelligence() {
@@ -396,6 +418,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.selectedProviderID = providerID
         self.handleProviderChange(providerID)
         self.connectionStatus = self.connectionStatusByProvider[providerID] ?? .unknown
+        self.connectionErrorMessage = self.connectionErrorMessage(for: providerID)
         self.setEditingAPIKey(true, for: providerID)
     }
 
@@ -693,7 +716,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let baseURL = self.providerBaseURL(for: providerID)
         if self.hasProviderAPIKeyDraft(for: providerID), !self.saveProviderAPIKeys(invalidating: providerID) {
             self.updateConnectionStatus(.failed, for: providerID)
-            self.connectionErrorMessage = "Could not save API key to Keychain. Grant access and try again."
+            self.setConnectionError("Could not save API key to Keychain. Grant access and try again.", for: providerID)
             return
         }
         let apiKey = self.providerAPIKey(for: providerID)
@@ -704,7 +727,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         if baseURL.isEmpty {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = "Base URL is required for \(providerName)"
+                self.setConnectionError("Base URL is required for \(providerName)", for: providerID)
             }
             return
         }
@@ -712,7 +735,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         if !isLocal && apiKey.isEmpty {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = "API key is required for \(providerName). Enter your API key above."
+                self.setConnectionError("API key is required for \(providerName). Enter your API key above.", for: providerID)
             }
             return
         }
@@ -721,22 +744,30 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         guard !trimmedModel.isEmpty else {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = "Select a model before verifying. You may need to add a model manually for \(providerName)."
+                self.setConnectionError("Select a model before verifying. You may need to add a model manually for \(providerName).", for: providerID)
             }
             return
         }
+        let usesResponsesAPI = self.shouldVerifyWithResponsesAPI(baseURL: baseURL, model: trimmedModel)
 
         await MainActor.run {
             self.isTestingConnection = true
             self.updateConnectionStatus(.testing, for: providerID)
-            self.connectionErrorMessage = ""
         }
 
         // Build the endpoint URL
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let fullURL: String
 
-        if isAnthropic {
+        if usesResponsesAPI {
+            if endpoint.contains("/responses") {
+                fullURL = endpoint
+            } else if endpoint.contains("/chat/completions") {
+                fullURL = endpoint.replacingOccurrences(of: "/chat/completions", with: "/responses")
+            } else {
+                fullURL = endpoint + "/responses"
+            }
+        } else if isAnthropic {
             // Anthropic uses /messages endpoint, not /chat/completions
             if endpoint.contains("/messages") {
                 fullURL = endpoint
@@ -751,14 +782,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         // Debug logging
         DebugLogger.shared.debug(
-            "testAPIConnection: provider=\(providerID), model=\(trimmedModel), baseURL=\(endpoint), fullURL=\(fullURL), isAnthropic=\(isAnthropic)",
+            "testAPIConnection: provider=\(providerID), model=\(trimmedModel), baseURL=\(endpoint), fullURL=\(fullURL), isAnthropic=\(isAnthropic), usesResponsesAPI=\(usesResponsesAPI)",
             source: "AISettingsView"
         )
 
         guard let url = URL(string: fullURL) else {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = "Invalid Base URL format: '\(endpoint)' could not be parsed as a URL"
+                self.setConnectionError("Invalid Base URL format: '\(endpoint)' could not be parsed as a URL", for: providerID)
             }
             return
         }
@@ -784,7 +815,25 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let provKey = self.providerKey(for: providerID)
         let reasoningConfig = self.settings.getReasoningConfig(forModel: trimmedModel, provider: provKey)
 
-        if isAnthropic {
+        if usesResponsesAPI {
+            var dict: [String: Any] = [
+                "model": trimmedModel,
+                "input": "test",
+                "store": false,
+                "max_output_tokens": 50,
+            ]
+
+            if let config = reasoningConfig, config.isEnabled {
+                if config.parameterName == "reasoning_effort" {
+                    dict["reasoning"] = ["effort": config.parameterValue]
+                } else if config.parameterName == "enable_thinking" {
+                    dict[config.parameterName] = config.parameterValue == "true"
+                } else {
+                    dict[config.parameterName] = config.parameterValue
+                }
+            }
+            requestDict = dict
+        } else if isAnthropic {
             // Anthropic API format
             requestDict = [
                 "model": trimmedModel,
@@ -818,7 +867,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         guard let jsonData = try? JSONSerialization.data(withJSONObject: requestDict, options: []) else {
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = "Internal error: Failed to create test request payload"
+                self.setConnectionError("Internal error: Failed to create test request payload", for: providerID)
             }
             return
         }
@@ -834,7 +883,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 if statusCode >= 200, statusCode < 300 {
                     await MainActor.run {
                         self.updateConnectionStatus(.success, for: providerID)
-                        self.connectionErrorMessage = ""
                         self.setEditingAPIKey(false, for: providerID)
                         self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
                     }
@@ -842,10 +890,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                     // Parse error response for more details
                     let errorMessage = self.interpretVerificationError(
                         statusCode: statusCode,
-                        responseData: data,
-                        providerID: providerID,
-                        model: trimmedModel,
-                        endpoint: fullURL
+                        responseData: data
                     )
                     DebugLogger.shared.error(
                         "testAPIConnection failed: HTTP \(statusCode) for \(providerID), model=\(trimmedModel)\nError: \(errorMessage)\nResponse: \(String(data: data, encoding: .utf8)?.prefix(500) ?? "nil")",
@@ -853,13 +898,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                     )
                     await MainActor.run {
                         self.updateConnectionStatus(.failed, for: providerID)
-                        self.connectionErrorMessage = errorMessage
+                        self.setConnectionError(errorMessage, for: providerID)
                     }
                 }
             } else {
                 await MainActor.run {
                     self.updateConnectionStatus(.failed, for: providerID)
-                    self.connectionErrorMessage = "Unexpected response type from server"
+                    self.setConnectionError("Unexpected response type from server", for: providerID)
                 }
             }
         } catch {
@@ -870,7 +915,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             )
             await MainActor.run {
                 self.updateConnectionStatus(.failed, for: providerID)
-                self.connectionErrorMessage = errorMessage
+                self.setConnectionError(errorMessage, for: providerID)
             }
         }
 
@@ -879,64 +924,31 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
     }
 
-    /// Interprets HTTP error responses with actionable guidance
-    private func interpretVerificationError(statusCode: Int, responseData: Data, providerID: String, model: String, endpoint: String) -> String {
-        let providerName = ModelRepository.shared.displayName(for: providerID)
-        let responseBody = String(data: responseData, encoding: .utf8)?.lowercased() ?? ""
+    /// Returns the provider's HTTP error body unchanged so setup errors match the real API response.
+    private func interpretVerificationError(statusCode: Int, responseData: Data) -> String {
+        let responseBody = String(data: responseData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        switch statusCode {
-        case 400:
-            // Check for specific error patterns in response
-            if responseBody.contains("model") {
-                return "Invalid model '\(model)' for \(providerName). Check if the model name is correct."
-            }
-            if responseBody.contains("messages") || responseBody.contains("content") {
-                return "Request format error for \(providerName). The API may have changed or the base URL is pointed at a different API."
-            }
-            return "Bad request (HTTP 400). Check that the base URL '\(endpoint)' is correct for \(providerName)."
-
-        case 401:
-            if responseBody.contains("invalid") || responseBody.contains("expired") {
-                return "Invalid API key for \(providerName). Please verify your API key is correct and not expired."
-            }
-            if responseBody.contains("missing") {
-                return "API key is missing. Enter your \(providerName) API key above."
-            }
-            return "Authentication failed (HTTP 401). Your \(providerName) API key may be invalid. Double-check the key."
-
-        case 403:
-            if responseBody.contains("permission") || responseBody.contains("access") {
-                return "Permission denied. Your \(providerName) API key may not have access to this model."
-            }
-            if responseBody.contains("region") || responseBody.contains("country") {
-                return "Access denied. \(providerName) may not be available in your region."
-            }
-            return "Forbidden (HTTP 403). Check your \(providerName) account permissions and subscription."
-
-        case 404:
-            if responseBody.contains("model") {
-                return "Model '\(model)' not found on \(providerName). Check if the model name is spelled correctly."
-            }
-            return "Endpoint not found (HTTP 404). The base URL '\(endpoint)' may be incorrect for \(providerName)."
-
-        case 422:
-            if responseBody.contains("model") {
-                return "Model '\(model)' is not valid for \(providerName). Try a different model."
-            }
-            return "Invalid request parameters for \(providerName). The model or configuration may be incorrect."
-
-        case 429:
-            return "Rate limited by \(providerName). Wait a moment and try again."
-
-        case 500, 502, 503:
-            return "\(providerName) server error (HTTP \(statusCode)). The service may be temporarily unavailable."
-
-        case 529:
-            return "\(providerName) is overloaded. Try again in a few moments."
-
-        default:
-            return "HTTP \(statusCode) from \(providerName). Check your API key, base URL, and model configuration."
+        if let responseBody, !responseBody.isEmpty {
+            return "HTTP \(statusCode): \(responseBody)"
         }
+        return "HTTP \(statusCode)"
+    }
+
+    private func shouldVerifyWithResponsesAPI(baseURL: String, model: String) -> Bool {
+        if baseURL.contains("/responses") {
+            return true
+        }
+
+        guard let url = URL(string: baseURL),
+              url.host?.lowercased() == "api.openai.com"
+        else { return false }
+
+        let modelLower = model.lowercased()
+        return modelLower.hasPrefix("gpt-5") ||
+            modelLower.hasPrefix("o1") ||
+            modelLower.hasPrefix("o3") ||
+            modelLower.hasPrefix("o4")
     }
 
     /// Interprets network errors with actionable guidance
@@ -1300,7 +1312,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         var fingerprints = self.settings.verifiedProviderFingerprints
         fingerprints[key] = fingerprint
         self.settings.verifiedProviderFingerprints = fingerprints
-        self.connectionStatusByProvider[providerID] = .success
+        self.updateConnectionStatus(.success, for: providerID)
+        self.clearConnectionError(for: providerID)
     }
 
     private func invalidateVerificationIfNeeded(for providerID: String) {
@@ -1312,6 +1325,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         if current != stored {
             self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
             self.connectionStatusByProvider[providerID] = .unknown
+            self.clearConnectionError(for: providerID)
         }
     }
 
@@ -1319,6 +1333,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let key = self.providerKey(for: providerID)
         self.settings.verifiedProviderFingerprints.removeValue(forKey: key)
         self.connectionStatusByProvider[providerID] = .unknown
+        self.clearConnectionError(for: providerID)
     }
 
     private func refreshVerifiedProviders() {

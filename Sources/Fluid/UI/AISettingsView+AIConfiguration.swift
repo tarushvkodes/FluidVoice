@@ -466,6 +466,15 @@ extension AIEnhancementSettingsView {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
+            if !isExpanded,
+               self.viewModel.connectionStatus(for: item.id) == .failed,
+               !self.viewModel.connectionErrorMessage(for: item.id).isEmpty
+            {
+                self.providerErrorPreview(self.viewModel.connectionErrorMessage(for: item.id), lineLimit: 2)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
             if isExpanded {
                 Divider()
                     .background(self.theme.palette.separator.opacity(0.5))
@@ -1156,6 +1165,12 @@ extension AIEnhancementSettingsView {
                     self.reasoningConfigSection
                 }
 
+                if self.viewModel.connectionStatus(for: item.id) == .failed,
+                   !self.viewModel.connectionErrorMessage(for: item.id).isEmpty
+                {
+                    self.providerErrorPreview(self.viewModel.connectionErrorMessage(for: item.id), lineLimit: 8)
+                }
+
                 if let error = self.viewModel.fetchModelsError, !error.isEmpty {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -1219,6 +1234,31 @@ extension AIEnhancementSettingsView {
                 }
             }
         })
+    }
+
+    private func providerErrorPreview(_ message: String, lineLimit: Int) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.red)
+                .padding(.top, 2)
+
+            Text(message)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.red.opacity(0.9))
+                .lineLimit(lineLimit)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.red.opacity(0.11))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.red.opacity(0.18), lineWidth: 1)
+        )
     }
 
     private var customProviderButton: some View {

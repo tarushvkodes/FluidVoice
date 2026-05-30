@@ -2092,8 +2092,8 @@ final class SettingsStore: ObservableObject {
             return .openAIGPT5
         }
 
-        // OpenAI o1/o3 reasoning models
-        if modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") {
+        // OpenAI o-series reasoning models
+        if modelLower.hasPrefix("o1") || modelLower.hasPrefix("o3") || modelLower.hasPrefix("o4") {
             return .openAIO1
         }
 
@@ -2149,6 +2149,7 @@ final class SettingsStore: ObservableObject {
             modelLower.contains("gpt-5.") ||
             modelLower.hasPrefix("o1") ||
             modelLower.hasPrefix("o3") ||
+            modelLower.hasPrefix("o4") ||
             modelLower.contains("gpt-oss") ||
             modelLower.hasPrefix("openai/") ||
             (modelLower.contains("deepseek") && modelLower.contains("reasoner"))

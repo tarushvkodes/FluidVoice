@@ -19,17 +19,15 @@ extension SettingsStore {
     }
 
     var effectiveCommandModeProviderID: String {
-        if self.commandModeLinkedToGlobal,
-           let providerID = self.supportedCommandModeProviderID(self.selectedProviderID)
-        {
-            return providerID
+        if self.commandModeLinkedToGlobal {
+            return self.selectedProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         if let providerID = self.supportedCommandModeProviderID(self.commandModeSelectedProviderID) {
             return providerID
         }
 
-        return "openai"
+        return self.commandModeSelectedProviderID.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var effectiveCommandModeSelectedModel: String {
@@ -92,7 +90,7 @@ extension SettingsStore {
         return trimmed
     }
 
-    private func isCommandModeProviderVerified(_ providerID: String) -> Bool {
+    func isCommandModeProviderVerified(_ providerID: String) -> Bool {
         let key = ModelRepository.shared.providerKey(for: providerID)
         guard let stored = self.verifiedProviderFingerprints[key] else { return false }
 
