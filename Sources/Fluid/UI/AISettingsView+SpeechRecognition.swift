@@ -333,7 +333,7 @@ extension VoiceEngineSettingsView {
                             Text("Select Language")
                                 .font(.caption)
                                 .fontWeight(.semibold)
-                            Text("Choose the language prompt injected into Nemotron transcription, or use auto detect.")
+                            Text("Choose a supported Nemotron language prompt, or use auto detect.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)

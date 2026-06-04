@@ -3881,8 +3881,10 @@ extension SettingsStore {
 
     var selectedNemotronLanguage: NemotronLanguage {
         get {
-            if let rawValue = self.defaults.string(forKey: Keys.selectedNemotronLanguage) {
-                return NemotronLanguage(rawValue: rawValue)
+            if let rawValue = self.defaults.string(forKey: Keys.selectedNemotronLanguage),
+               let language = NemotronLanguage.supportedLanguage(rawValue: rawValue)
+            {
+                return language
             }
             return .english
         }
