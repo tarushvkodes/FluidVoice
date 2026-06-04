@@ -14,7 +14,7 @@ final class NemotronProvider: TranscriptionProvider {
 
         var displayName: String {
             switch self {
-            case .offline: return "Nemotron Speech 3.5 - Accurate"
+            case .offline: return "Nemotron 3.5 Multilingual"
             case .streaming: return "Nemotron Speech 3.5 - Fast"
             case .streaming320: return "Nemotron Speech 3.5 - Fast"
             }
@@ -539,7 +539,7 @@ final class NemotronProvider: TranscriptionProvider {
 
         var displayName: String {
             switch self {
-            case .offline: return "Nemotron Speech 3.5 - Accurate"
+            case .offline: return "Nemotron 3.5 Multilingual"
             case .streaming: return "Nemotron Speech 3.5 - Fast"
             case .streaming320: return "Nemotron Speech 3.5 - Fast"
             }
