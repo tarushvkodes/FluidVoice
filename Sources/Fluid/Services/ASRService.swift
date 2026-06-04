@@ -126,11 +126,10 @@ final class ASRService: ObservableObject {
 
     /// Returns a user-friendly status message for model loading state
     var modelStatusMessage: String {
-        let usesExternalArtifacts = SettingsStore.shared.selectedSpeechModel.requiresExternalArtifacts
         if self.isAsrReady { return "Model ready" }
         if self.isDownloadingModel { return "Downloading model..." }
         if self.isLoadingModel { return "Loading model into memory..." }
-        if self.modelsExistOnDisk { return usesExternalArtifacts ? "Model cached, needs loading" : "Model cached, needs loading" }
+        if self.modelsExistOnDisk { return "Model cached, needs loading" }
         return "Model not downloaded"
     }
 
@@ -140,6 +139,7 @@ final class ASRService: ObservableObject {
     private var fluidAudioProvider: FluidAudioProvider?
     private var parakeetRealtimeProvider: ParakeetRealtimeProvider?
     private var externalCoreMLProvider: ExternalCoreMLTranscriptionProvider?
+    private var nemotronProviders: [NemotronProvider.Mode: NemotronProvider] = [:]
     private var whisperProvider: WhisperProvider?
     private var appleSpeechProvider: AppleSpeechProvider?
     /// Stored as Any? because @available cannot be applied to stored properties
@@ -171,11 +171,9 @@ final class ASRService: ObservableObject {
             return self.getParakeetRealtimeProvider()
         case .cohereTranscribeSixBit:
             return self.getExternalCoreMLProvider()
+        case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
+            return self.getNemotronProvider(mode: model.nemotronProviderMode)
         case .qwen3Asr:
-            DebugLogger.shared.warning(
-                "ASRService: Qwen provider removed; falling back to FluidAudio Parakeet path",
-                source: "ASRService"
-            )
             return self.getFluidAudioProvider()
         default:
             return self.getWhisperProvider()
@@ -214,6 +212,14 @@ final class ASRService: ObservableObject {
         let provider = ExternalCoreMLTranscriptionProvider()
         self.externalCoreMLProvider = provider
         DebugLogger.shared.info("ASRService: Created external CoreML provider", source: "ASRService")
+        return provider
+    }
+
+    private func getNemotronProvider(mode: NemotronProvider.Mode) -> NemotronProvider {
+        if let existing = self.nemotronProviders[mode] { return existing }
+        let provider = NemotronProvider(mode: mode)
+        self.nemotronProviders[mode] = provider
+        DebugLogger.shared.info("ASRService: Created \(provider.name) provider", source: "ASRService")
         return provider
     }
 
@@ -361,19 +367,19 @@ final class ASRService: ObservableObject {
             return AppleSpeechProvider()
         case .parakeetTDT, .parakeetTDTv2:
             // Create a new provider configured for the specific model
-            let provider = FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
-            return provider
+            return FluidAudioProvider(modelOverride: model, configureWordBoosting: false)
         case .parakeetRealtime:
             return ParakeetRealtimeProvider()
         case .cohereTranscribeSixBit:
             return ExternalCoreMLTranscriptionProvider(modelOverride: model)
+        case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
+            return NemotronProvider(mode: model.nemotronProviderMode)
         case .qwen3Asr:
             // Qwen support removed; route legacy requests to Parakeet v3.
             return FluidAudioProvider(modelOverride: .parakeetTDT, configureWordBoosting: false)
         default:
             // Whisper models - create provider with specific model override
-            let provider = WhisperProvider(modelOverride: model)
-            return provider
+            return WhisperProvider(modelOverride: model)
         }
     }
 
@@ -2781,6 +2787,16 @@ final class ASRService: ObservableObject {
         }
 
         return result
+    }
+}
+
+private extension SettingsStore.SpeechModel {
+    var nemotronProviderMode: NemotronProvider.Mode {
+        switch self {
+        case .nemotronStreaming: return .streaming
+        case .nemotronStreaming320: return .streaming320
+        default: return .offline
+        }
     }
 }
 

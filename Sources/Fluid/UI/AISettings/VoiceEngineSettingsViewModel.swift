@@ -207,6 +207,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             return "Qwen3 ASR is a multilingual FluidAudio model with strong quality, but higher memory usage. Requires macOS 15+."
         case .cohereTranscribeSixBit:
             return "Cohere Transcribe downloads a CoreML pipeline from Hugging Face and caches it locally. Select the language manually before dictation. Best on Apple Silicon with 8GB+ RAM."
+        case .nemotronOffline:
+            return "Nemotron Speech 3.5 Accurate uses NVIDIA CoreML models with manual language selection. Best on Apple Silicon with 8GB+ RAM."
+        case .nemotronStreaming, .nemotronStreaming320:
+            return "Nemotron Speech 3.5 Fast uses NVIDIA's streaming CoreML pipeline with manual language selection. Best for low-latency Apple Silicon dictation."
         default:
             return "Whisper models support 99 languages and work on any Mac."
         }

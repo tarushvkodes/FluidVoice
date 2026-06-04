@@ -322,6 +322,53 @@ extension VoiceEngineSettingsView {
                 )
             }
 
+            if model == .nemotronOffline || model == .nemotronStreaming || model == .nemotronStreaming320 {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .center, spacing: 10) {
+                        Image(systemName: "globe")
+                            .font(.caption)
+                            .foregroundStyle(self.theme.palette.accent)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Select Language Manually")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            Text("Choose the language prompt injected into Nemotron transcription.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Picker("Nemotron Language", selection: Binding(
+                            get: { self.settings.selectedNemotronLanguage },
+                            set: { newValue in
+                                guard newValue != self.settings.selectedNemotronLanguage else { return }
+                                self.settings.selectedNemotronLanguage = newValue
+                            }
+                        )) {
+                            ForEach(SettingsStore.NemotronLanguage.allCases) { language in
+                                Text(language.displayName).tag(language)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .disabled(self.viewModel.asr.isRunning)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(self.theme.palette.accent.opacity(0.08))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(self.theme.palette.accent.opacity(0.20), lineWidth: 1)
+                        )
+                )
+            }
+
             if supportsCustomWords {
                 HStack(alignment: .center, spacing: 10) {
                     Image(systemName: "checkmark.seal.fill")
