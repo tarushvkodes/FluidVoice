@@ -170,46 +170,17 @@ extension AIEnhancementSettingsView {
     }
 
     private var promptControlsRow: some View {
-        ZStack {
-            HStack(alignment: .center, spacing: 12) {
-                Button("+ Add Prompt") {
-                    self.viewModel.openNewPromptEditor(prefillMode: self.selectedPromptMode)
-                }
-                .buttonStyle(CompactButtonStyle(isReady: true))
-                .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
-
-                Spacer(minLength: 8)
-
-                self.promptProcessingControl
+        HStack(alignment: .center, spacing: 12) {
+            Button("+ Add Prompt") {
+                self.viewModel.openNewPromptEditor(prefillMode: self.selectedPromptMode)
             }
+            .buttonStyle(CompactButtonStyle(isReady: true))
+            .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
 
+            Spacer(minLength: 8)
             self.promptModeTabSelector
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private var promptProcessingControl: some View {
-        let isPrivateAILocked = self.viewModel.isPrivateAIModelSelected()
-        let isOff = self.viewModel.isPrimaryDictationPromptSelectionOff()
-        let helpText: String = {
-            if isOff {
-                return "Off: dictation types the raw transcript. Prompts and app overrides are paused."
-            }
-            if isPrivateAILocked {
-                return "On: \(PrivateAIProviderFeature.displayName) uses the \(PrivateAIProviderFeature.displayName) prompt."
-            }
-            return "On: dictation follows the selected prompt scope."
-        }()
-
-        return HStack(alignment: .center, spacing: 7) {
-            Text("AI Enhancement")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .lineLimit(1)
-
-            self.cleanupSegmentedControl(isOff: isOff, mode: .dictate)
-        }
-        .help(helpText)
     }
 
     private var promptModeTabSelector: some View {
@@ -404,82 +375,14 @@ extension AIEnhancementSettingsView {
         .padding(.horizontal, 4)
     }
 
-    private func cleanupSegmentedControl(isOff: Bool, mode: SettingsStore.PromptMode) -> some View {
-        let tone = self.modeAccentColor(mode)
-
-        return
-            HStack(spacing: 4) {
-                self.cleanupSegmentButton(
-                    title: "Off",
-                    key: "off",
-                    isSelected: isOff,
-                    tone: tone,
-                    action: { self.viewModel.selectPrimaryDictationPromptOff() }
-                )
-
-                self.cleanupSegmentButton(
-                    title: "On",
-                    key: "on",
-                    isSelected: !isOff,
-                    tone: tone,
-                    action: {
-                        if mode.normalized == .dictate, self.viewModel.isPrivateAIModelSelected() {
-                            self.viewModel.selectPrivateAIPromptIfAvailable()
-                        } else {
-                            self.viewModel.setSelectedPromptID(nil, for: mode)
-                        }
-                    }
-                )
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .padding(3)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(self.theme.palette.contentBackground.opacity(0.78))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(self.theme.palette.cardBorder.opacity(0.22), lineWidth: 1)
-                    )
-            )
-    }
-
-    private func cleanupSegmentButton(
-        title: String,
-        key: String,
-        isSelected: Bool,
-        tone: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        let isHovering = self.hoveredCleanupControlKey == key
-        let cornerRadius: CGFloat = 9
-
-        return Button {
-            action()
-        } label: {
-            Text(title)
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 12)
-        .frame(height: 26)
-        .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .fluidControlSurface(
-            isSelected: isSelected,
-            isHovered: isHovering,
-            tone: tone,
-            cornerRadius: cornerRadius
-        )
-        .foregroundStyle(isSelected ? tone : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
-        .onHover { hovering in
-            self.hoveredCleanupControlKey = hovering ? key : nil
-        }
-    }
-
     private func promptRoutingScopeRow(mode: SettingsStore.PromptMode) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Text(mode.normalized == .dictate ? "Use AI" : "Use prompts")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .frame(width: AISettingsLayout.promptScopeLabelWidth, alignment: .leading)
+
+            Spacer(minLength: 12)
 
             HStack(spacing: 4) {
                 self.promptRoutingScopeButton(
@@ -503,13 +406,8 @@ extension AIEnhancementSettingsView {
                     )
             )
 
-            Spacer(minLength: 12)
-
             if mode.normalized == .edit {
                 self.editModeInlineModelControls
-            } else {
-                Color.clear
-                    .frame(height: AISettingsLayout.controlHeight)
             }
         }
         .frame(minHeight: AISettingsLayout.controlHeight)

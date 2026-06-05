@@ -56,7 +56,7 @@ struct AIEnhancementSettingsView: View {
             case .providerCatalog:
                 return "Provider Catalog"
             case .promptsRouting:
-                return "Prompts & Routing"
+                return "Customize Prompts"
             }
         }
     }

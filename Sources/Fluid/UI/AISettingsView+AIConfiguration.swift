@@ -50,42 +50,10 @@ extension AIEnhancementSettingsView {
         VStack(spacing: 14) {
             ThemedCard(style: .prominent, hoverEffect: false) {
                 VStack(alignment: .leading, spacing: 16) {
-                    self.aiSetupHeader
-                    self.activeAIConfigurationSummary
 
                     HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("AI Configuration")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("Switch between provider setup and prompt routing from the top tabs.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
+                        self.aiSetupHeader
                         Spacer()
-
-                        Button(action: { self.viewModel.showHelp.toggle() }) {
-                            HStack(spacing: 5) {
-                                Image(systemName: self.viewModel.showHelp ? "questionmark.circle.fill" : "questionmark.circle")
-                                    .font(.system(size: 14))
-                                Text("Help")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                            }
-                            .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.accent : .secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule()
-                                    .fill(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.12) : self.theme.palette.cardBackground.opacity(0.8))
-                                    .overlay(
-                                        Capsule()
-                                            .stroke(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.4), lineWidth: 1)
-                                    )
-                            )
-                        }
-                        .buttonStyle(.plain)
-
                         Picker("", selection: self.$selectedTab) {
                             ForEach(AIEnhancementSettingsView.AIEnhancementTab.allCases) { tab in
                                 Text(tab.title).tag(tab)
@@ -94,6 +62,8 @@ extension AIEnhancementSettingsView {
                         .pickerStyle(.segmented)
                         .frame(width: 420, alignment: .trailing)
                     }
+
+                    self.mainAIPostProcessingControl
 
                     if self.viewModel.showHelp { self.helpSectionView }
 
@@ -105,6 +75,9 @@ extension AIEnhancementSettingsView {
                             self.promptsStepContent
                         }
                     }
+                    .opacity(self.viewModel.isPrimaryDictationPromptSelectionOff() ? 0.42 : 1)
+                    .saturation(self.viewModel.isPrimaryDictationPromptSelectionOff() ? 0 : 1)
+                    .disabled(self.viewModel.isPrimaryDictationPromptSelectionOff())
                 }
                 .padding(16)
             }
@@ -149,95 +122,91 @@ extension AIEnhancementSettingsView {
         }
     }
 
-    private var activeAIConfigurationSummary: some View {
-        let providerName = self.viewModel.providerDisplayName(for: self.viewModel.selectedProviderID)
-        let modelName = self.viewModel.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let connection = self.viewModel.connectionStatus(for: self.viewModel.selectedProviderID)
-        let statusText: String
-        let statusColor: Color
+    private var mainAIPostProcessingControl: some View {
+        let isOff = self.viewModel.isPrimaryDictationPromptSelectionOff()
 
-        switch connection {
-        case .success:
-            statusText = "Verified"
-            statusColor = Color.fluidGreen
-        case .failed:
-            statusText = "Needs attention"
-            statusColor = .red
-        case .testing:
-            statusText = "Checking"
-            statusColor = self.theme.palette.accent
-        case .unknown:
-            statusText = self.settings.isAIConfigured ? "Configured" : "Not configured"
-            statusColor = self.settings.isAIConfigured ? self.theme.palette.accent : .orange
-        }
-
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(self.theme.palette.contentBackground.opacity(0.88))
-                    Image(systemName: self.settings.isAIConfigured ? "sparkles" : "sparkles.rectangle.stack")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.accent)
-                }
-                .frame(width: 38, height: 38)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Active AI Setup")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                    Text(providerName)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.primaryText)
-                }
-
-                Spacer()
-
-                Text(statusText)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(statusColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(statusColor.opacity(0.12))
-                    )
+        return HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("AI Post-Processing")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.primaryText)
+                Text(isOff ? "Dictation types the raw transcript." : "Dictation runs through the selected AI prompt flow.")
+                    .font(.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
-            HStack(spacing: 10) {
-                self.aiSummaryChip(title: "Model", value: modelName.isEmpty ? "Choose a model" : modelName)
-                self.aiSummaryChip(title: "Dictation", value: self.viewModel.isPrimaryDictationPromptSelectionOff() ? "Raw" : "Enhanced")
-            }
+            Spacer(minLength: 12)
+
+            self.mainAIPostProcessingSegmentedControl(isOff: isOff)
         }
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.55))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(self.theme.palette.cardBackground.opacity(0.52))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.32), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.28), lineWidth: 1)
+                )
+        )
+        .help(isOff ? "Off: dictation types the raw transcript. Prompts and app overrides are paused." : "On: dictation follows the selected prompt scope.")
+    }
+
+    private func mainAIPostProcessingSegmentedControl(isOff: Bool) -> some View {
+        HStack(spacing: 4) {
+            self.mainAIPostProcessingButton(
+                title: "Off",
+                key: "main-ai-processing-off",
+                isSelected: isOff,
+                action: { self.viewModel.selectPrimaryDictationPromptOff() }
+            )
+
+            self.mainAIPostProcessingButton(
+                title: "On",
+                key: "main-ai-processing-on",
+                isSelected: !isOff,
+                action: { self.viewModel.restorePrimaryDictationPromptSelection() }
+            )
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.78))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.22), lineWidth: 1)
                 )
         )
     }
 
-    private func aiSummaryChip(title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(self.theme.palette.tertiaryText)
-            Text(value)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(self.theme.palette.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(self.theme.palette.cardBackground.opacity(0.76))
-        )
+    private func mainAIPostProcessingButton(
+        title: String,
+        key: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isHovering = self.hoveredCleanupControlKey == key
+        let cornerRadius: CGFloat = 9
+
+        return Button(title, action: action)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 14)
+            .frame(height: 28)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .fluidControlSurface(
+                isSelected: isSelected,
+                isHovered: isHovering,
+                tone: self.theme.palette.accent,
+                cornerRadius: cornerRadius
+            )
+            .foregroundStyle(
+                isSelected
+                    ? self.theme.palette.accent
+                    : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+            )
+            .onHover { hovering in
+                self.hoveredCleanupControlKey = hovering ? key : nil
+            }
     }
 
     var apiKeyWarningView: some View {

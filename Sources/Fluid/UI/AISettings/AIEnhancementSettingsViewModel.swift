@@ -113,6 +113,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var draftPromptMode: SettingsStore.PromptMode = .dictate
     @Published var draftIncludeContext: Bool = false
     @Published var promptEditorSessionID: UUID = .init()
+    private var lastActivePrimaryDictationPromptSelection: SettingsStore.DictationPromptSelection?
 
     // Prompt Deletion UI
     @Published var showingDeletePromptConfirm: Bool = false
@@ -147,6 +148,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.selectedDictationPromptID = self.settings.selectedDictationPromptID
         self.selectedEditPromptID = self.settings.selectedEditPromptID
         self.isDictationPromptOff = self.settings.isDictationPromptOff
+        if !self.settings.isDictationPromptOff {
+            self.lastActivePrimaryDictationPromptSelection = self.settings.dictationPromptSelection
+        }
 
         if !ModelRepository.shared.isBuiltIn(self.selectedProviderID),
            self.savedProviders.contains(where: { $0.id == self.selectedProviderID }) == false
@@ -1789,9 +1793,34 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func selectPrimaryDictationPromptOff() {
+        let currentSelection = self.settings.dictationPromptSelection
+        if currentSelection != .off {
+            self.lastActivePrimaryDictationPromptSelection = currentSelection
+        }
         self.settings.setDictationPromptSelection(.off)
         self.selectedDictationPromptID = self.settings.selectedDictationPromptID
         self.isDictationPromptOff = self.settings.isDictationPromptOff
+    }
+
+    func restorePrimaryDictationPromptSelection() {
+        let selection = self.restorablePrimaryDictationPromptSelection()
+        self.settings.setDictationPromptSelection(selection)
+        self.selectedDictationPromptID = self.settings.selectedDictationPromptID
+        self.isDictationPromptOff = self.settings.isDictationPromptOff
+    }
+
+    private func restorablePrimaryDictationPromptSelection() -> SettingsStore.DictationPromptSelection {
+        switch self.lastActivePrimaryDictationPromptSelection {
+        case let .profile(id):
+            if self.settings.dictationPromptProfiles.contains(where: { $0.id == id && $0.mode.normalized == .dictate }) {
+                return .profile(id)
+            }
+            return .default
+        case .default:
+            return .default
+        case .off, .none:
+            return .default
+        }
     }
 
     private func resolveBindingTargetApp() -> (name: String, bundleID: String)? {
