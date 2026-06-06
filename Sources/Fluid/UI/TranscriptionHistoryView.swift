@@ -8,6 +8,8 @@ struct TranscriptionHistoryView: View {
 
     @State private var searchQuery: String = ""
     @State private var showClearConfirmation: Bool = false
+    @State private var showFeedbackPlaceholder: Bool = false
+    @State private var selectedFeedbackEntry: TranscriptionHistoryEntry?
     @State private var selectedEntryID: UUID?
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
@@ -69,6 +71,18 @@ struct TranscriptionHistoryView: View {
             }
         } message: {
             Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries. This action cannot be undone.")
+        }
+        .alert("Feedback placeholder", isPresented: self.$showFeedbackPlaceholder) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Nothing was sent. This is reserved for opt-in bad result reporting with review and redaction before upload.")
+        }
+        .sheet(item: self.$selectedFeedbackEntry) { entry in
+            TranscriptionFeedbackPlaceholderSheet(entry: entry) {
+                self.selectedFeedbackEntry = nil
+                self.showFeedbackPlaceholder = true
+            }
+            .environment(\.theme, self.theme)
         }
     }
 
@@ -222,6 +236,14 @@ struct TranscriptionHistoryView: View {
 
             Divider()
 
+            Button {
+                self.openFeedbackPlaceholder(for: entry)
+            } label: {
+                Label("Report Bad Result...", systemImage: "hand.thumbsup.slash")
+            }
+
+            Divider()
+
             Button(role: .destructive) {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     self.historyStore.deleteEntry(id: entry.id)
@@ -338,6 +360,16 @@ struct TranscriptionHistoryView: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         }
+
+                        Button {
+                            self.openFeedbackPlaceholder(for: entry)
+                        } label: {
+                            Label("Report", systemImage: "hand.thumbsup.slash")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Placeholder only. Nothing is sent.")
 
                         if entry.wasAIProcessed {
                             Button {
@@ -532,6 +564,10 @@ struct TranscriptionHistoryView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    private func openFeedbackPlaceholder(for entry: TranscriptionHistoryEntry) {
+        self.selectedFeedbackEntry = entry
+    }
+
     private func combinedText(for entry: TranscriptionHistoryEntry) -> String {
         "\(entry.rawText)\n\n\(entry.processedText)"
     }
@@ -590,6 +626,82 @@ struct TranscriptionHistoryView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.contentBackground)
+    }
+}
+
+private struct TranscriptionFeedbackPlaceholderSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
+
+    @State private var inputText: String
+    @State private var outputText: String
+    @State private var comment: String
+
+    let onSend: () -> Void
+
+    init(entry: TranscriptionHistoryEntry, onSend: @escaping () -> Void) {
+        _inputText = State(initialValue: entry.rawText)
+        _outputText = State(initialValue: entry.processedText)
+        _comment = State(initialValue: "")
+        self.onSend = onSend
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Report bad result")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("Review or edit what would be sent. Nothing is uploaded yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            self.feedbackField(title: "Input", text: self.$inputText, height: 88)
+            self.feedbackField(title: "Output", text: self.$outputText, height: 88)
+            self.feedbackField(title: "Comment optional", text: self.$comment, height: 72)
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    self.dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Send") {
+                    self.onSend()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(self.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && self.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .background(self.theme.palette.contentBackground)
+    }
+
+    private func feedbackField(title: String, text: Binding<String>, height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            TextEditor(text: text)
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(height: height)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(self.theme.palette.cardBackground)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(self.theme.palette.cardBorder.opacity(0.55), lineWidth: 1)
+                        )
+                )
+        }
     }
 }
 

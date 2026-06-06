@@ -1594,7 +1594,8 @@ struct ContentView: View {
                     baseURL: derivedBaseURL,
                     model: derivedSelectedModel,
                     apiKey: apiKey,
-                    localModelPath: FluidIntelligenceIntegrationService.configuredLocalModelPath
+                    localModelPath: FluidIntelligenceIntegrationService.configuredLocalModelPath,
+                    usesStablePromptPrefixKVCache: SettingsStore.shared.fluidIntelligencePrefixKVCacheEnabled
                 ),
                 context: FluidIntelligenceIntegrationService.AppContext(
                     appName: appInfo.name,
@@ -2669,7 +2670,15 @@ struct ContentView: View {
             _ = self.handleCancelShortcut()
         }
         NotchContentState.shared.onDictationPromptSelectionRequested = { selection in
-            guard !Fluid1PromptFormat.isAvailable() else { return }
+            let fluid1Available = Fluid1PromptFormat.isAvailable()
+            switch selection {
+            case .off:
+                break
+            case .fluid1:
+                guard fluid1Available else { return }
+            case .default, .profile:
+                guard !fluid1Available else { return }
+            }
             let slot = self.activeDictationShortcutSlot ?? .primary
             SettingsStore.shared.setDictationPromptSelection(selection, for: slot)
             self.applyDictationShortcutSelectionContext(for: slot)
@@ -3020,13 +3029,6 @@ extension ContentView {
         self.activeDictationShortcutSlot = slot
         NotchContentState.shared.activeDictationShortcutSlot = slot
         NotchContentState.shared.isPromptModeActive = (slot == .secondary)
-
-        if Fluid1PromptFormat.isAvailable(settings: settings) {
-            self.promptModeOverrideText = nil
-            NotchContentState.shared.promptModeOverrideProfileName = "Fluid Intelligence"
-            NotchContentState.shared.promptModeOverrideProfileID = Fluid1PromptFormat.promptSelectionID
-            return
-        }
 
         switch settings.dictationPromptSelection(for: slot) {
         case .off, .default:

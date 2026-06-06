@@ -42,7 +42,8 @@ final class DictationPostProcessingService {
                     baseURL: resolved.baseURL,
                     model: resolved.model,
                     apiKey: resolved.apiKey,
-                    localModelPath: FluidIntelligenceIntegrationService.configuredLocalModelPath
+                    localModelPath: FluidIntelligenceIntegrationService.configuredLocalModelPath,
+                    usesStablePromptPrefixKVCache: settings.fluidIntelligencePrefixKVCacheEnabled
                 ),
                 context: FluidIntelligenceIntegrationService.AppContext(
                     appName: "",

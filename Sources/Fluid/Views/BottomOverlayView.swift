@@ -1319,9 +1319,8 @@ private struct BottomOverlayPromptMenuView: View {
     @ViewBuilder
     private func offRow() -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
-        let isSelected = !self.fluid1Locked && self.settings.dictationPromptSelection(for: activeSlot) == .off
+        let isSelected = self.settings.dictationPromptSelection(for: activeSlot) == .off
         Button(action: {
-            guard !self.fluid1Locked else { return }
             if self.promptMode.normalized == .dictate {
                 self.contentState.onDictationPromptSelectionRequested?(.off)
             } else {
@@ -1343,10 +1342,8 @@ private struct BottomOverlayPromptMenuView: View {
             .background(self.rowBackground(isSelected: isSelected, rowID: "off"))
         }
         .buttonStyle(.plain)
-        .disabled(self.fluid1Locked)
-        .opacity(self.fluid1Locked ? 0.45 : 1)
         .onHover { hovering in
-            self.hoveredRowID = hovering && !self.fluid1Locked ? "off" : nil
+            self.hoveredRowID = hovering ? "off" : nil
         }
     }
 
@@ -1390,7 +1387,7 @@ private struct BottomOverlayPromptMenuView: View {
     private func fluid1Row() -> some View {
         let activeSlot = self.contentState.activeDictationShortcutSlot ?? .primary
         let isAvailable = Fluid1PromptFormat.isAvailable(settings: self.settings)
-        let isSelected = isAvailable || self.settings.dictationPromptSelection(for: activeSlot) == .fluid1
+        let isSelected = self.settings.dictationPromptSelection(for: activeSlot) == .fluid1
         Button(action: {
             guard isAvailable else { return }
             self.contentState.onDictationPromptSelectionRequested?(.fluid1)
@@ -1466,13 +1463,15 @@ private struct BottomOverlayPromptMenuView: View {
                     .padding(.vertical, 4)
             }
 
-            self.defaultRow(selectedID: selectedID)
+            if !self.fluid1Locked {
+                self.defaultRow(selectedID: selectedID)
+            }
 
             if self.promptMode.normalized == .dictate {
                 self.fluid1Row()
             }
 
-            if !profiles.isEmpty {
+            if !self.fluid1Locked && !profiles.isEmpty {
                 Divider()
                     .padding(.vertical, 4)
 

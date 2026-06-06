@@ -190,13 +190,13 @@ extension AIEnhancementSettingsView {
 
     private var promptProcessingControl: some View {
         let isFluid1Locked = self.viewModel.isFluid1ModelSelected()
-        let isOff = isFluid1Locked ? false : self.viewModel.isPrimaryDictationPromptSelectionOff()
+        let isOff = self.viewModel.isPrimaryDictationPromptSelectionOff()
         let helpText: String = {
-            if isFluid1Locked {
-                return "Fluid Intelligence selected. AI Enhancement uses the Fluid Intelligence prompt."
-            }
             if isOff {
                 return "Off: dictation types the raw transcript. Prompts and app overrides are paused."
+            }
+            if isFluid1Locked {
+                return "On: Fluid Intelligence uses the Fluid Intelligence prompt."
             }
             return "On: dictation follows the selected prompt scope."
         }()
@@ -207,7 +207,7 @@ extension AIEnhancementSettingsView {
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .lineLimit(1)
 
-            self.cleanupSegmentedControl(isOff: isOff, mode: .dictate, isEnabled: !isFluid1Locked)
+            self.cleanupSegmentedControl(isOff: isOff, mode: .dictate)
         }
         .help(helpText)
     }
@@ -276,7 +276,7 @@ extension AIEnhancementSettingsView {
         let tone = self.modeAccentColor(mode)
         let isFluid1Locked = mode.normalized == .dictate && self.viewModel.isFluid1ModelSelected()
         let isSelectedAppsOnly = !isFluid1Locked && self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
-        let isPromptRoutingPaused = mode.normalized == .dictate && self.viewModel.isPrimaryDictationPromptSelectionOff() && !isFluid1Locked
+        let isPromptRoutingPaused = mode.normalized == .dictate && self.viewModel.isPrimaryDictationPromptSelectionOff()
 
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -369,7 +369,7 @@ extension AIEnhancementSettingsView {
                 }
 
                 if isFluid1Locked {
-                    Text("Fluid Intelligence selected. Prompt choices are locked until you change model or provider.")
+                    Text("Fluid Intelligence selected. Only the Fluid Intelligence prompt is available when AI Enhancement is On.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
@@ -404,7 +404,7 @@ extension AIEnhancementSettingsView {
         .padding(.horizontal, 4)
     }
 
-    private func cleanupSegmentedControl(isOff: Bool, mode: SettingsStore.PromptMode, isEnabled: Bool = true) -> some View {
+    private func cleanupSegmentedControl(isOff: Bool, mode: SettingsStore.PromptMode) -> some View {
         let tone = self.modeAccentColor(mode)
 
         return
@@ -414,7 +414,6 @@ extension AIEnhancementSettingsView {
                     key: "off",
                     isSelected: isOff,
                     tone: tone,
-                    isEnabled: isEnabled,
                     action: { self.viewModel.selectPrimaryDictationPromptOff() }
                 )
 
@@ -423,8 +422,13 @@ extension AIEnhancementSettingsView {
                     key: "on",
                     isSelected: !isOff,
                     tone: tone,
-                    isEnabled: isEnabled,
-                    action: { self.viewModel.setSelectedPromptID(nil, for: mode) }
+                    action: {
+                        if mode.normalized == .dictate, self.viewModel.isFluid1ModelSelected() {
+                            self.viewModel.selectFluid1PromptIfAvailable()
+                        } else {
+                            self.viewModel.setSelectedPromptID(nil, for: mode)
+                        }
+                    }
                 )
             }
             .font(.system(size: 12, weight: .semibold))
@@ -444,14 +448,12 @@ extension AIEnhancementSettingsView {
         key: String,
         isSelected: Bool,
         tone: Color,
-        isEnabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
         let isHovering = self.hoveredCleanupControlKey == key
         let cornerRadius: CGFloat = 9
 
         return Button {
-            guard isEnabled else { return }
             action()
         } label: {
             Text(title)
@@ -467,10 +469,8 @@ extension AIEnhancementSettingsView {
             cornerRadius: cornerRadius
         )
         .foregroundStyle(isSelected ? tone : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.48)
         .onHover { hovering in
-            self.hoveredCleanupControlKey = hovering && isEnabled ? key : nil
+            self.hoveredCleanupControlKey = hovering ? key : nil
         }
     }
 

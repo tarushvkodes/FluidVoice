@@ -632,6 +632,8 @@ extension AIEnhancementSettingsView {
                 .foregroundStyle(status.color)
             }
 
+            self.fluidIntelligencePrefixCacheRow(isBusy: isBusy)
+
             if self.viewModel.connectionStatus(for: "fluid-1") == .failed,
                !self.viewModel.connectionErrorMessage.isEmpty
             {
@@ -694,6 +696,41 @@ extension AIEnhancementSettingsView {
                 .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func fluidIntelligencePrefixCacheRow(isBusy: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "bolt.horizontal.circle")
+                .font(.caption)
+                .foregroundStyle(self.theme.palette.accent)
+                .frame(width: 16)
+
+            Toggle("Prefix cache", isOn: self.fluidIntelligencePrefixCacheBinding)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .font(.caption)
+                .disabled(isBusy)
+                .help("Reuse the stable Fluid prompt KV cache for faster local dictation enhancement.")
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var fluidIntelligencePrefixCacheBinding: Binding<Bool> {
+        Binding(
+            get: { self.settings.fluidIntelligencePrefixKVCacheEnabled },
+            set: { enabled in
+                guard self.settings.fluidIntelligencePrefixKVCacheEnabled != enabled else { return }
+                self.settings.fluidIntelligencePrefixKVCacheEnabled = enabled
+                self.fluidIntelligenceLoadState = .idle
+                Task { @MainActor in
+                    await FluidIntelligenceIntegrationService.shared.unloadCachedRuntime(
+                        reason: enabled ? "prefix cache enabled" : "prefix cache disabled"
+                    )
+                    self.viewModel.refreshProviderItems()
+                }
+            }
+        )
     }
 
     private var fluidIntelligenceModelBinding: Binding<String> {

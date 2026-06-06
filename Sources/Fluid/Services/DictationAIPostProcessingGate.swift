@@ -12,13 +12,13 @@ enum DictationAIPostProcessingGate {
 
     static func isConfigured(for slot: SettingsStore.DictationShortcutSlot, appBundleID: String? = nil) -> Bool {
         let settings = SettingsStore.shared
-        if FluidIntelligenceIntegrationService.isLocalRuntimeConfigured {
-            return true
-        }
+        guard settings.dictationPromptSelection(for: slot) != .off else { return false }
         if Fluid1PromptFormat.isAvailable(settings: settings) {
+            if FluidIntelligenceIntegrationService.isLocalRuntimeConfigured {
+                return true
+            }
             return self.isProviderConfigured()
         }
-        guard settings.dictationPromptSelection(for: slot) != .off else { return false }
         if let appBundleID,
            settings.promptRoutingScope(for: .dictate) == .selectedAppsOnly,
            !settings.hasAppPromptBinding(for: .dictate, appBundleID: appBundleID)

@@ -12,6 +12,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let selectedModelByProvider: [String: String]
     let savedProviders: [SettingsStore.SavedProvider]
     let modelReasoningConfigs: [String: SettingsStore.ModelReasoningConfig]
+    let fluidIntelligencePrefixKVCacheEnabled: Bool?
     let selectedSpeechModel: SettingsStore.SpeechModel
     let selectedCohereLanguage: SettingsStore.CohereLanguage
     let selectedNemotronLanguage: SettingsStore.NemotronLanguage?

@@ -549,10 +549,13 @@ final class ASRService: ObservableObject {
     }
 
     private var streamingChunkDurationSeconds: Double {
-        if SettingsStore.shared.parakeetFinalizationMode == .tokenTimedChunkMerge {
+        let selectedModel = SettingsStore.shared.selectedSpeechModel
+        if selectedModel == .parakeetTDT || selectedModel == .parakeetTDTv2,
+           SettingsStore.shared.parakeetFinalizationMode == .tokenTimedChunkMerge
+        {
             return 0.4
         }
-        return SettingsStore.shared.selectedSpeechModel.streamingPreviewIntervalSeconds
+        return selectedModel.streamingPreviewIntervalSeconds
     }
 
     private var minimumStreamingPreviewSamples: Int {
@@ -1189,6 +1192,56 @@ final class ASRService: ObservableObject {
         let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
         self.recordWordBoostHitIfAny(transcribedText: cleanedText)
         return ASRTranscriptionResult(text: cleanedText, confidence: result.confidence)
+    }
+
+    func transcribeFileForAPI(_ fileURL: URL) async throws -> (result: ASRTranscriptionResult, sampleCount: Int) {
+        guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
+            throw NSError(
+                domain: "ASRService",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "Audio file is not readable."]
+            )
+        }
+
+        try await self.ensureAsrReady()
+        let provider = self.transcriptionProvider
+        guard provider.isReady else {
+            throw NSError(
+                domain: "ASRService",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "Transcription provider is not ready."]
+            )
+        }
+
+        let estimatedSamples = Self.estimatedMono16kSampleCount(for: fileURL)
+        guard provider.prefersNativeFileTranscription else {
+            let samples = try LocalAPIAudioDecoder.samples(from: fileURL)
+            let result = try await self.transcribeSamplesForAPI(samples)
+            return (result, samples.count)
+        }
+
+        let result = try await transcriptionExecutor.run { [provider] in
+            try await provider.transcribeFile(at: fileURL)
+        }
+
+        if !self.hasCompletedFirstTranscription {
+            self.hasCompletedFirstTranscription = true
+            self.isLoadingModel = false
+        }
+
+        let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
+        self.recordWordBoostHitIfAny(transcribedText: cleanedText)
+        return (ASRTranscriptionResult(text: cleanedText, confidence: result.confidence), estimatedSamples)
+    }
+
+    private static func estimatedMono16kSampleCount(for fileURL: URL) -> Int {
+        guard
+            let file = try? AVAudioFile(forReading: fileURL),
+            file.processingFormat.sampleRate > 0
+        else {
+            return 0
+        }
+        return Int((Double(file.length) * 16_000.0 / file.processingFormat.sampleRate).rounded())
     }
 
     func stopWithoutTranscription() async {

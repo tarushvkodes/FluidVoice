@@ -13,6 +13,7 @@ actor FluidIntelligenceIntegrationService {
         let model: String
         let apiKey: String
         let localModelPath: String?
+        let usesStablePromptPrefixKVCache: Bool
     }
 
     struct AppContext: Sendable, Equatable {
@@ -96,7 +97,7 @@ actor FluidIntelligenceIntegrationService {
     }
 
     nonisolated static func shouldHandleDictation(model: String) -> Bool {
-        self.isLocalRuntimeConfigured || Fluid1PromptFormat.matches(model: model)
+        Fluid1PromptFormat.matches(model: model)
     }
 
     private nonisolated static func bundledModelPath(for model: FluidRegisteredModel) -> String? {
@@ -143,7 +144,13 @@ actor FluidIntelligenceIntegrationService {
     }
 
     func loadModel(_ model: FluidRegisteredModel) async throws -> FluidIntelligenceStatus {
-        let runtime = try Self.localRuntimeConfiguration(for: model)
+        let usesStablePromptPrefixKVCache = await MainActor.run {
+            SettingsStore.shared.fluidIntelligencePrefixKVCacheEnabled
+        }
+        let runtime = try Self.localRuntimeConfiguration(
+            for: model,
+            usesStablePromptPrefixKVCache: usesStablePromptPrefixKVCache
+        )
         if let cachedRuntime, cachedRuntime != runtime {
             await self.unloadCachedRuntime(reason: "switching to \(model.id)")
         }
@@ -243,7 +250,8 @@ actor FluidIntelligenceIntegrationService {
                 LlamaSwiftRuntimeConfiguration(
                     modelPath: NSString(string: modelPath).expandingTildeInPath,
                     contextTokenLimit: LlamaSwiftRuntimeConfiguration.defaultContextTokenLimit,
-                    batchTokenLimit: LlamaSwiftRuntimeConfiguration.defaultBatchTokenLimit
+                    batchTokenLimit: LlamaSwiftRuntimeConfiguration.defaultBatchTokenLimit,
+                    usesStablePromptPrefixKVCache: runtime.usesStablePromptPrefixKVCache
                 )
             )
         }
@@ -278,7 +286,10 @@ actor FluidIntelligenceIntegrationService {
         )
     }
 
-    private static func localRuntimeConfiguration(for model: FluidRegisteredModel) throws -> RuntimeConfiguration {
+    private static func localRuntimeConfiguration(
+        for model: FluidRegisteredModel,
+        usesStablePromptPrefixKVCache: Bool
+    ) throws -> RuntimeConfiguration {
         guard let modelPath = self.localModelPath(for: model) else {
             throw FluidIntelligenceError.missingModel(model.displayName)
         }
@@ -289,7 +300,8 @@ actor FluidIntelligenceIntegrationService {
             baseURL: "",
             model: model.id,
             apiKey: "",
-            localModelPath: modelPath
+            localModelPath: modelPath,
+            usesStablePromptPrefixKVCache: usesStablePromptPrefixKVCache
         )
     }
 
@@ -300,7 +312,8 @@ actor FluidIntelligenceIntegrationService {
             baseURL: runtime.baseURL.trimmingCharacters(in: .whitespacesAndNewlines),
             model: runtime.model.trimmingCharacters(in: .whitespacesAndNewlines),
             apiKey: runtime.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-            localModelPath: runtime.localModelPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+            localModelPath: runtime.localModelPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+            usesStablePromptPrefixKVCache: runtime.usesStablePromptPrefixKVCache
         )
     }
 

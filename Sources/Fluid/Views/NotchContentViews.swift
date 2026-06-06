@@ -694,8 +694,8 @@ struct NotchExpandedView: View {
                         self.promptMenuRow(
                             "Off",
                             rowID: "off",
-                            isSelected: !fluid1Locked && self.settings.dictationPromptSelection(for: activeDictationSlot) == .off,
-                            isEnabled: !fluid1Locked
+                            isSelected: self.settings.dictationPromptSelection(for: activeDictationSlot) == .off,
+                            isEnabled: true
                         ) {
                             self.contentState.onDictationPromptSelectionRequested?(.off)
                             self.restoreRecordingTargetFocus()
@@ -703,14 +703,16 @@ struct NotchExpandedView: View {
                         }
                     }
 
-                    self.promptMenuRow("Default", rowID: "default", isSelected: !fluid1Locked && defaultSelected, isEnabled: !fluid1Locked) {
-                        if promptMode.normalized == .dictate {
-                            self.contentState.onDictationPromptSelectionRequested?(.default)
-                        } else {
-                            self.settings.setSelectedPromptID(nil, for: promptMode)
+                    if !fluid1Locked {
+                        self.promptMenuRow("Default", rowID: "default", isSelected: defaultSelected) {
+                            if promptMode.normalized == .dictate {
+                                self.contentState.onDictationPromptSelectionRequested?(.default)
+                            } else {
+                                self.settings.setSelectedPromptID(nil, for: promptMode)
+                            }
+                            self.restoreRecordingTargetFocus()
+                            self.dismissPromptHoverMenu()
                         }
-                        self.restoreRecordingTargetFocus()
-                        self.dismissPromptHoverMenu()
                     }
 
                     if promptMode.normalized == .dictate {
@@ -718,7 +720,7 @@ struct NotchExpandedView: View {
                         self.promptMenuRow(
                             "Fluid Intelligence",
                             rowID: "fluid-1",
-                            isSelected: fluid1Locked || self.settings.dictationPromptSelection(for: activeDictationSlot) == .fluid1,
+                            isSelected: self.settings.dictationPromptSelection(for: activeDictationSlot) == .fluid1,
                             isEnabled: fluid1Available
                         ) {
                             self.contentState.onDictationPromptSelectionRequested?(.fluid1)
@@ -727,7 +729,7 @@ struct NotchExpandedView: View {
                         }
                     }
 
-                    let profiles = self.settings.promptProfiles(for: promptMode)
+                    let profiles = fluid1Locked ? [] : self.settings.promptProfiles(for: promptMode)
                     if !profiles.isEmpty {
                         ForEach(profiles) { profile in
                             let isSelected = promptMode.normalized == .dictate
@@ -736,8 +738,7 @@ struct NotchExpandedView: View {
                             self.promptMenuRow(
                                 profile.name.isEmpty ? "Untitled" : profile.name,
                                 rowID: profile.id,
-                                isSelected: !fluid1Locked && isSelected,
-                                isEnabled: !fluid1Locked
+                                isSelected: isSelected
                             ) {
                                 if promptMode.normalized == .dictate {
                                     self.contentState.onDictationPromptSelectionRequested?(.profile(profile.id))

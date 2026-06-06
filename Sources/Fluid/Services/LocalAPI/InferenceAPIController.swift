@@ -42,6 +42,18 @@ final class InferenceAPIController: LocalAPIRouteHandler {
 
     private func transcribe(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         do {
+            if let fileURL = try self.decodeFilePath(from: request) {
+                let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
+                return LocalAPI.json(
+                    TranscribeResponse(
+                        text: apiResult.result.text,
+                        confidence: apiResult.result.confidence,
+                        sampleCount: apiResult.sampleCount,
+                        provider: SettingsStore.shared.selectedSpeechModel.displayName
+                    )
+                )
+            }
+
             let samples = try self.decodeAudioSamples(from: request)
             let result = try await AppServices.shared.asr.transcribeSamplesForAPI(samples)
             return LocalAPI.json(
@@ -55,6 +67,19 @@ final class InferenceAPIController: LocalAPIRouteHandler {
         } catch {
             return LocalAPI.error(error.localizedDescription, status: 400)
         }
+    }
+
+    private func decodeFilePath(from request: LocalAPI.Request) throws -> URL? {
+        guard self.isJSON(request) else { return nil }
+        let payload: TranscribeJSONRequest
+        do {
+            payload = try LocalAPI.decoder.decode(TranscribeJSONRequest.self, from: request.body)
+        } catch {
+            throw NSError(domain: "InferenceAPIController", code: -3, userInfo: [NSLocalizedDescriptionKey: "Invalid JSON audio payload."])
+        }
+
+        guard let path = payload.path, !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path)
     }
 
     private func postprocess(_ request: LocalAPI.Request) async -> LocalAPI.Response {

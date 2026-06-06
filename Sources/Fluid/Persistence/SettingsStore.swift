@@ -310,10 +310,12 @@ final class SettingsStore: ObservableObject {
     }
 
     func dictationPromptSelection(for slot: DictationShortcutSlot) -> DictationPromptSelection {
-        if Fluid1PromptFormat.isAvailable(settings: self) { return .fluid1 }
         if self.isDictationPromptOff(for: slot) { return .off }
+        if Fluid1PromptFormat.isAvailable(settings: self) { return .fluid1 }
         if let promptID = self.selectedDictationPromptID(for: slot) {
-            if promptID == Fluid1PromptFormat.promptSelectionID { return .default }
+            if promptID == Fluid1PromptFormat.promptSelectionID {
+                return Fluid1PromptFormat.isAvailable(settings: self) ? .fluid1 : .default
+            }
             return .profile(promptID)
         }
         return .default
@@ -459,8 +461,6 @@ final class SettingsStore: ObservableObject {
     }
 
     func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
-        if Fluid1PromptFormat.isAvailable(settings: self) { return "Fluid Intelligence" }
-
         switch self.dictationPromptSelection(for: slot) {
         case .off:
             return "Off"
@@ -1209,6 +1209,14 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.selectedProviderID)
+        }
+    }
+
+    var fluidIntelligencePrefixKVCacheEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.fluidIntelligencePrefixKVCacheEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.fluidIntelligencePrefixKVCacheEnabled)
         }
     }
 
@@ -2292,6 +2300,7 @@ final class SettingsStore: ObservableObject {
             selectedModelByProvider: self.selectedModelByProvider,
             savedProviders: self.savedProviders,
             modelReasoningConfigs: self.modelReasoningConfigs,
+            fluidIntelligencePrefixKVCacheEnabled: self.fluidIntelligencePrefixKVCacheEnabled,
             selectedSpeechModel: self.selectedSpeechModel,
             selectedCohereLanguage: self.selectedCohereLanguage,
             selectedNemotronLanguage: self.selectedNemotronLanguage,
@@ -2370,6 +2379,9 @@ final class SettingsStore: ObservableObject {
         self.selectedProviderID = payload.selectedProviderID
         self.selectedModelByProvider = payload.selectedModelByProvider
         self.modelReasoningConfigs = payload.modelReasoningConfigs
+        if let fluidIntelligencePrefixKVCacheEnabled = payload.fluidIntelligencePrefixKVCacheEnabled {
+            self.fluidIntelligencePrefixKVCacheEnabled = fluidIntelligencePrefixKVCacheEnabled
+        }
         self.selectedSpeechModel = payload.selectedSpeechModel
         self.selectedCohereLanguage = payload.selectedCohereLanguage
         if let selectedNemotronLanguage = payload.selectedNemotronLanguage {
@@ -3579,6 +3591,7 @@ private extension SettingsStore {
         static let selectedAIModel = "SelectedAIModel"
         static let selectedModelByProvider = "SelectedModelByProvider"
         static let selectedProviderID = "SelectedProviderID"
+        static let fluidIntelligencePrefixKVCacheEnabled = "FluidIntelligencePrefixKVCacheEnabled"
         static let providerAPIKeys = "ProviderAPIKeys"
         static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
         static let savedProviders = "SavedProviders"
@@ -3590,6 +3603,7 @@ private extension SettingsStore {
         static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
         static let syncAudioDevicesWithSystem = "SyncAudioDevicesWithSystem"
         static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
+        static let launchAtStartup = "LaunchAtStartup"
         static let showInDock = "ShowInDock"
         static let accentColorOption = "AccentColorOption"
         static let enableTranscriptionSounds = "EnableTranscriptionSounds"

@@ -1762,7 +1762,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func isPrimaryDictationPromptSelectionOff() -> Bool {
-        if self.isFluid1ModelSelected() { return false }
         return self.settings.isDictationPromptOff
     }
 
@@ -1775,7 +1774,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func isFluid1PromptSelected() -> Bool {
-        self.isFluid1ModelSelected() || self.settings.dictationPromptSelection == .fluid1
+        self.settings.dictationPromptSelection == .fluid1
     }
 
     func selectFluid1PromptIfAvailable() {
@@ -1786,7 +1785,6 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func selectPrimaryDictationPromptOff() {
-        guard !self.isFluid1ModelSelected() else { return }
         self.settings.setDictationPromptSelection(.off)
         self.selectedDictationPromptID = self.settings.selectedDictationPromptID
         self.isDictationPromptOff = self.settings.isDictationPromptOff
@@ -1873,7 +1871,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func setSelectedPromptID(_ id: String?, for mode: SettingsStore.PromptMode) {
         if mode.normalized == .dictate {
-            if let id {
+            if self.isFluid1ModelSelected() {
+                if id == nil {
+                    self.settings.setDictationPromptSelection(.fluid1)
+                }
+            } else if let id {
                 self.settings.setDictationPromptSelection(.profile(id))
             } else {
                 self.settings.setDictationPromptSelection(.default)
