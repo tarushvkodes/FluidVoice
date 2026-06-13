@@ -12,12 +12,14 @@ final class TranscriptionSoundPlayer {
     private init() {}
 
     func playStartSound() {
+        guard SettingsStore.shared.enableTranscriptionSounds else { return }
         let selected = SettingsStore.shared.transcriptionStartSound
         guard let soundName = selected.startSoundFileName else { return }
         self.play(soundName: soundName)
     }
 
     func playStopSound() {
+        guard SettingsStore.shared.enableTranscriptionSounds else { return }
         let selected = SettingsStore.shared.transcriptionStartSound
         guard let soundName = selected.stopSoundFileName else { return }
         self.play(soundName: soundName)
