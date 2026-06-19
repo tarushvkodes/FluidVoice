@@ -519,6 +519,96 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(SimpleUpdater.isRollbackVersion(nil, differentFrom: "1.5.11-beta.3"))
     }
 
+    // MARK: - Model download HTML/markup rejection (#353)
+
+    func testLooksLikeHTML_rejectsMarkupVariants() {
+        // A proxy/block page or stand-in markup document must be rejected regardless of
+        // which markup token it opens with — not just <!doctype / <html.
+        let rejected = [
+            "<!DOCTYPE html><html lang=\"en\"><head></head></html>",
+            "<html><body>Blocked by corporate proxy</body></html>",
+            "<script>window.location='https://proxy'</script>",
+            "<head><title>Access Denied</title></head>",
+            "<body>Forbidden</body>",
+            "<meta http-equiv=\"refresh\" content=\"0\">",
+            "<!-- corporate gateway notice -->",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><error>blocked</error>",
+            "</html>",
+            "<!doctype HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\">",
+        ]
+        for markup in rejected {
+            XCTAssertTrue(
+                HuggingFaceModelDownloader.looksLikeHTML(Data(markup.utf8)),
+                "Expected markup to be rejected: \(markup)"
+            )
+        }
+    }
+
+    func testLooksLikeHTML_rejectsLeadingWhitespaceAndBOMVariants() {
+        let bom: [UInt8] = [0xEF, 0xBB, 0xBF]
+
+        // Leading ASCII whitespace before the markup token.
+        XCTAssertTrue(HuggingFaceModelDownloader.looksLikeHTML(Data("   \n\t<!DOCTYPE html>".utf8)))
+        XCTAssertTrue(HuggingFaceModelDownloader.looksLikeHTML(Data("\r\n  <html>".utf8)))
+
+        // UTF-8 BOM, then markup.
+        XCTAssertTrue(HuggingFaceModelDownloader.looksLikeHTML(Data(bom + Array("<html>".utf8))))
+
+        // BOM, then whitespace, then an XML declaration.
+        XCTAssertTrue(
+            HuggingFaceModelDownloader.looksLikeHTML(Data(bom + Array("  \n<?xml version=\"1.0\"?>".utf8)))
+        )
+    }
+
+    func testLooksLikeHTML_acceptsModelArtifacts() {
+        // JSON object (vocab / metadata / Manifest) — note the embedded `<pad>` must NOT
+        // trip the detector; only a LEADING `<` does.
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data("{\"0\": \"<pad>\", \"1\": \"a\"}".utf8)))
+        // JSON array body.
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data("[1, 2, 3]".utf8)))
+        // MIL program text (`model.mil`).
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data("program(1.0)\n[buildInfo = ...]".utf8)))
+        // Binary CoreML / Mach-O magic prefix.
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data([0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00])))
+        // Leading-NUL binary (e.g. coremldata.bin / weight.bin style payloads).
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data([0x00, 0x00, 0x01, 0x3C, 0x68])))
+        // Empty payload.
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data()))
+        // A stray `<` NOT followed by a markup-ish byte must not be over-rejected.
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data("< not markup".utf8)))
+        XCTAssertFalse(HuggingFaceModelDownloader.looksLikeHTML(Data("<".utf8)))
+    }
+
+    func testValidateDownloadedFile_rejectsHTMLBodyAndAcceptsJSON() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FluidVoice-ValidateTest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // HTML body written without an HTML Content-Type (response: nil) must still be
+        // rejected by the byte-sniff path.
+        let htmlURL = dir.appendingPathComponent("coremldata.bin")
+        try Data("<!DOCTYPE html><html><body>Blocked</body></html>".utf8).write(to: htmlURL)
+        XCTAssertThrowsError(
+            try HuggingFaceModelDownloader.validateDownloadedFile(
+                at: htmlURL,
+                response: nil,
+                relativePath: "coremldata.bin"
+            )
+        )
+
+        // A real JSON vocab payload must pass validation.
+        let jsonURL = dir.appendingPathComponent("parakeet_v3_vocab.json")
+        try Data("{\"0\": \"<pad>\", \"1\": \"the\"}".utf8).write(to: jsonURL)
+        XCTAssertNoThrow(
+            try HuggingFaceModelDownloader.validateDownloadedFile(
+                at: jsonURL,
+                response: nil,
+                relativePath: "parakeet_v3_vocab.json"
+            )
+        )
+    }
+
     private static func modelDirectoryForRun() -> URL {
         // Use a stable path on CI so GitHub Actions cache can speed up runs.
         if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" ||

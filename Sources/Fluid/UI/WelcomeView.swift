@@ -1903,6 +1903,12 @@ struct OnboardingFlowView: View {
                 try await self.asr.ensureAsrReady()
             } catch {
                 DebugLogger.shared.error("Failed to prepare onboarding voice model \(route.model.displayName): \(error)", source: "OnboardingFlowView")
+                // Surface the failure in the UI instead of only logging it, so the user
+                // isn't stuck at a disabled button. The shared ContentView alert (bound to
+                // asr.showError) presents this during onboarding. See #355.
+                self.asr.errorTitle = "Voice Model Setup Failed"
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
             }
             await self.asr.checkIfModelsExistAsync()
         }

@@ -196,6 +196,10 @@ final class HuggingFaceModelDownloader {
                         continuation.resume(throwing: NSError(domain: "HF", code: http.statusCode))
                         return
                     }
+                    // Reject HTML error/block pages (e.g. a corporate proxy returning its
+                    // notification page with HTTP 200) before persisting them as a model
+                    // file, otherwise a corrupt payload is cached permanently. See #353.
+                    try Self.validateDownloadedFile(at: tempUrl, response: response, relativePath: relativePath)
                     try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
                     if FileManager.default.fileExists(atPath: destination.path) {
                         try FileManager.default.removeItem(at: destination)
@@ -203,6 +207,8 @@ final class HuggingFaceModelDownloader {
                     try FileManager.default.moveItem(at: tempUrl, to: destination)
                     continuation.resume()
                 } catch {
+                    // Never leave a rejected/partial payload behind.
+                    try? FileManager.default.removeItem(at: tempUrl)
                     continuation.resume(throwing: error)
                 }
             }
@@ -211,6 +217,82 @@ final class HuggingFaceModelDownloader {
             }
             task.resume()
         }
+    }
+
+    // MARK: - Content Validation
+
+    /// Validates a freshly-downloaded artifact before it is persisted as a model file.
+    ///
+    /// A network proxy / secure web gateway can return an HTML (or XML) block page with
+    /// HTTP 200 in place of the real file. Persisting that markup (e.g. as `coremldata.bin`)
+    /// permanently caches a corrupt model. We reject any payload that looks like HTML/XML
+    /// markup — by its `Content-Type` or by its leading bytes — since no model artifact
+    /// (CoreML binary, JSON vocab, `.mil`) is a markup document. See issue #353.
+    static func validateDownloadedFile(at fileURL: URL, response: URLResponse?, relativePath: String) throws {
+        if let http = response as? HTTPURLResponse,
+           let contentType = http.value(forHTTPHeaderField: "Content-Type") {
+            let lowered = contentType.lowercased()
+            if lowered.contains("text/html") || lowered.contains("text/xml") || lowered.contains("application/xml") {
+                throw Self.invalidContentError(
+                    relativePath: relativePath,
+                    detail: "the server returned a markup page (Content-Type: \(contentType))"
+                )
+            }
+        }
+
+        // Sniff the leading bytes in case markup was returned without a markup Content-Type.
+        // Read a small prefix only — model files can be gigabytes.
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        let prefix = (try? handle.read(upToCount: 512)) ?? Data()
+        if Self.looksLikeHTML(prefix) {
+            throw Self.invalidContentError(
+                relativePath: relativePath,
+                detail: "the downloaded file is an HTML/markup document, not the expected model data"
+            )
+        }
+    }
+
+    /// Returns `true` if `data` begins with an HTML / XML markup marker, ignoring a leading
+    /// UTF-8 BOM and ASCII whitespace.
+    ///
+    /// No artifact this downloader fetches legitimately begins with `<`: CoreML compiled
+    /// `.mlmodelc` / `.mlpackage` payloads are binary (`coremldata.bin`, `weights/weight.bin`,
+    /// `model.mlmodel` protobuf) or JSON (`metadata.json`, `Manifest.json`) starting with
+    /// `{` / `[`; the MIL program text (`model.mil`) starts with `program`; the vocab JSON
+    /// starts with `{`; and `tokenizer.model` is a SentencePiece binary. So any payload that,
+    /// after BOM + whitespace stripping, starts with `<` followed by a markup-ish byte is a
+    /// proxy/block page or a markup document standing in for the real file — reject it. This
+    /// catches `<!doctype`, `<html`, `<head>`, `<body>`, `<script>`, `<meta>`, comments
+    /// (`<!-- -->`) and XML / `<?xml` declarations, not just the two prefixes we used to
+    /// match. See issue #353.
+    static func looksLikeHTML(_ data: Data) -> Bool {
+        var bytes = [UInt8](data.prefix(512))
+        if bytes.starts(with: [0xEF, 0xBB, 0xBF]) {
+            bytes.removeFirst(3)
+        }
+        while let first = bytes.first,
+              first == 0x20 || first == 0x09 || first == 0x0A || first == 0x0D {
+            bytes.removeFirst()
+        }
+        // Must begin with `<` (0x3C)…
+        guard bytes.first == 0x3C, bytes.count >= 2 else {
+            return false
+        }
+        // …immediately followed by a markup-ish byte: an ASCII letter (a tag such as
+        // `<html`), `!` (0x21 — `<!doctype`, `<!--`), `?` (0x3F — `<?xml`), or `/` (0x2F —
+        // a stray closing tag). Requiring this second byte avoids over-rejecting a
+        // hypothetical text artifact that merely contains a stray `<` not followed by markup.
+        let second = bytes[1]
+        let isAsciiLetter = (second >= 0x41 && second <= 0x5A) || (second >= 0x61 && second <= 0x7A)
+        return isAsciiLetter || second == 0x21 || second == 0x3F || second == 0x2F
+    }
+
+    private static func invalidContentError(relativePath: String, detail: String) -> NSError {
+        NSError(domain: "HF", code: -3, userInfo: [
+            NSLocalizedDescriptionKey:
+                "Could not download \(relativePath): \(detail). A network proxy or firewall may be blocking model downloads.",
+        ])
     }
 
     private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
