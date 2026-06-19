@@ -37,7 +37,7 @@ struct OnboardingAIEnhancementStepView: View {
     @Namespace private var exampleMorphNamespace
 
     private enum ScrollTarget {
-        static let top = "fluid-intelligence-top"
+        static let top = "ai-enhancement-top"
     }
 
     private struct EnhancementExample: Identifiable {
@@ -100,17 +100,21 @@ struct OnboardingAIEnhancementStepView: View {
         PrivateAIModelRegistry.defaultModel
     }
 
-    private var fluidIntelligenceName: String {
+    private var hasPrivateAIProvider: Bool {
+        PrivateFeatures.privateAIProvider
+    }
+
+    private var privateAIProviderName: String {
         let displayName = PrivateAIProviderFeature.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if displayName.isEmpty || displayName == "Private AI Provider" {
-            return "Fluid Intelligence"
+            return "Built-in AI"
         }
         return displayName
     }
 
     private var privateAIModelDisplayName: String {
         let displayName = self.privateAIModel.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return displayName.isEmpty ? "Fluid-1" : displayName
+        return displayName.isEmpty ? "AI model" : displayName
     }
 
     private var privateAIModelSizeText: String {
@@ -285,7 +289,7 @@ struct OnboardingAIEnhancementStepView: View {
                     .padding(.horizontal, 32)
                     .padding(.bottom, 10)
 
-                Text("FluidVoice can polish your raw dictation unlike other apps out there, locally, for free.")
+                Text(self.setupSubtitleText)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.64))
                     .multilineTextAlignment(.center)
@@ -301,20 +305,38 @@ struct OnboardingAIEnhancementStepView: View {
                 .frame(width: self.exampleGridWidth(containerWidth: containerWidth))
                 .padding(.bottom, 18)
 
-            Text("Want FluidVoice to polish your dictation?")
+            Text(self.setupQuestionText)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.92))
                 .padding(.bottom, 12)
 
-            self.fluidIntelligenceCard(scrollProxy: scrollProxy)
+            self.setupChoiceCard(scrollProxy: scrollProxy)
                 .frame(width: min(containerWidth - 92, 840))
                 .padding(.bottom, 12)
 
-            Text(self.shouldShowTryout ? "Try it below before finishing setup." : "You can change this later in AI Enhancement settings.")
+            Text(self.setupFootnoteText)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.46))
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var setupSubtitleText: String {
+        if self.hasPrivateAIProvider {
+            return "FluidVoice can polish raw dictation locally with an optional built-in AI engine."
+        }
+        return "Optional: connect your own AI provider to polish dictation."
+    }
+
+    private var setupQuestionText: String {
+        self.hasPrivateAIProvider ? "Want FluidVoice to polish your dictation?" : "Want AI polishing?"
+    }
+
+    private var setupFootnoteText: String {
+        if self.shouldShowTryout {
+            return "Try it below before finishing setup."
+        }
+        return "You can change this later in AI Enhancement settings."
     }
 
     private func playgroundSection(containerWidth: CGFloat) -> some View {
@@ -469,7 +491,7 @@ struct OnboardingAIEnhancementStepView: View {
 
     private var playgroundExamplesPanel: some View {
         VStack(spacing: ExampleGridMetrics.rowSpacing) {
-            self.exampleGridHeader(leftTitle: "Try saying this", rightTitle: "Fluid Intelligence output")
+            self.exampleGridHeader(leftTitle: "Try saying this", rightTitle: "Polished output")
 
             ForEach(Self.examples) { example in
                 self.playgroundExampleRow(example)
@@ -674,15 +696,82 @@ struct OnboardingAIEnhancementStepView: View {
         .accessibilityLabel("Try example. \(example.raw)")
     }
 
-    private func fluidIntelligenceCard(scrollProxy: ScrollViewProxy) -> some View {
+    @ViewBuilder
+    private func setupChoiceCard(scrollProxy: ScrollViewProxy) -> some View {
+        if self.hasPrivateAIProvider {
+            self.privateAIProviderCard(scrollProxy: scrollProxy)
+        } else {
+            self.genericAIProviderCard
+        }
+    }
+
+    private var genericAIProviderCard: some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
-        let isHovered = self.hoveredButtonID == "fluid-intelligence" && self.canNavigateOrMutate
+        let isHovered = self.hoveredButtonID == "generic-ai-provider" && self.canNavigateOrMutate
+
+        return HStack(alignment: .center, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("AI provider")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+
+                Label("Connect your own provider to polish dictation.", systemImage: "sparkles")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.74))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+
+                HStack(spacing: 13) {
+                    self.modelFact("key.fill", "Uses your API key")
+                    self.modelFact("slider.horizontal.3", "Configurable later")
+                    self.modelFact("network", "Cloud or local")
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            self.pillButton(
+                PillButtonConfiguration(
+                    id: "generic-ai-provider",
+                    title: "Set up provider",
+                    systemImage: "arrow.up.right",
+                    tone: .primary,
+                    width: 168,
+                    height: 40,
+                    fontSize: 13,
+                    isEnabled: self.canNavigateOrMutate
+                ),
+                action: {
+                    self.cancelPrivateAIAction()
+                    self.onUseAIProvider()
+                }
+            )
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .background(
+            shape
+                .fill(Color.white.opacity(isHovered ? 0.070 : 0.052))
+                .overlay(shape.stroke(FluidOnboardingLandingColors.blue.opacity(isHovered ? 0.42 : 0.26), lineWidth: 1))
+                .shadow(color: FluidOnboardingLandingColors.blue.opacity(isHovered ? 0.18 : 0.08), radius: isHovered ? 18 : 10, x: 0, y: 5)
+        )
+        .onHover { isHovered in
+            self.setHoveredButton(isHovered ? "generic-ai-provider" : nil)
+        }
+    }
+
+    private func privateAIProviderCard(scrollProxy: ScrollViewProxy) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        let isHovered = self.hoveredButtonID == "private-ai-provider" && self.canNavigateOrMutate
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
-                        Text(self.fluidIntelligenceName)
+                        Text(self.privateAIProviderName)
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(.white)
                             .lineLimit(1)
@@ -724,7 +813,7 @@ struct OnboardingAIEnhancementStepView: View {
                     if self.canDeletePrivateAIModel {
                         self.pillButton(
                             PillButtonConfiguration(
-                                id: "fluid-intelligence-delete",
+                                id: "private-ai-provider-delete",
                                 title: "Delete",
                                 systemImage: "trash.fill",
                                 tone: .destructive,
@@ -766,7 +855,7 @@ struct OnboardingAIEnhancementStepView: View {
                 .shadow(color: FluidOnboardingLandingColors.blue.opacity(isHovered ? 0.18 : 0.08), radius: isHovered ? 18 : 10, x: 0, y: 5)
         )
         .onHover { isHovered in
-            self.setHoveredButton(isHovered ? "fluid-intelligence" : nil)
+            self.setHoveredButton(isHovered ? "private-ai-provider" : nil)
         }
     }
 
@@ -808,7 +897,7 @@ struct OnboardingAIEnhancementStepView: View {
     private func primaryPrivateAIButton(scrollProxy: ScrollViewProxy) -> some View {
         self.pillButton(
             PillButtonConfiguration(
-                id: "fluid-intelligence",
+                id: "private-ai-provider",
                 title: self.primaryPrivateAIButtonTitle,
                 systemImage: self.primaryPrivateAIButtonIcon,
                 tone: .primary,
@@ -882,7 +971,7 @@ struct OnboardingAIEnhancementStepView: View {
         self.pillButton(
             PillButtonConfiguration(
                 id: "ai-provider",
-                title: "Use my own AI provider",
+                title: self.hasPrivateAIProvider ? "Use my own AI provider" : "Set up AI provider",
                 systemImage: "arrow.up.right",
                 tone: .secondary,
                 width: 280,
