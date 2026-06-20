@@ -51,50 +51,18 @@ extension AIEnhancementSettingsView {
             ThemedCard(style: .prominent, hoverEffect: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     self.aiSetupHeader
-                    self.aiSetupSummaryBar
+                    self.aiConfigurationSectionPicker
 
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Providers")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("Configure your AI provider")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    Group {
+                        switch self.selectedConfigurationSection {
+                        case .providers:
+                            self.providerConfigurationContent
+                        case .advancedPrompts:
+                            self.promptsStepContent
                         }
-
-                        Spacer()
-
-                        Button(action: { self.viewModel.showHelp.toggle() }) {
-                            HStack(spacing: 5) {
-                                Image(systemName: self.viewModel.showHelp ? "questionmark.circle.fill" : "questionmark.circle")
-                                    .font(.system(size: 14))
-                                Text("Help")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                            }
-                            .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.accent : .secondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule()
-                                    .fill(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.12) : self.theme.palette.cardBackground.opacity(0.8))
-                                    .overlay(
-                                        Capsule()
-                                            .stroke(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.4), lineWidth: 1)
-                                    )
-                            )
-                        }
-                        .buttonStyle(.plain)
                     }
-
-                    if self.viewModel.showHelp { self.helpSectionView }
-
-                    self.providerStepContent
-
-                    Divider()
-                        .background(self.theme.palette.separator.opacity(0.5))
-
-                    self.promptsStepContent
+                    .transition(.opacity)
+                    .animation(.easeOut(duration: 0.12), value: self.selectedConfigurationSection)
                 }
                 .padding(16)
             }
@@ -130,12 +98,113 @@ extension AIEnhancementSettingsView {
                     .font(.title3)
                     .fontWeight(.semibold)
                     .foregroundStyle(self.theme.palette.primaryText)
-                Text("Choose the model used for AI Enhancement.")
+                Text("Set up providers and prompt behavior separately.")
                     .font(.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             Spacer()
+        }
+    }
+
+    private var aiConfigurationSectionPicker: some View {
+        HStack(spacing: 3) {
+            ForEach(AIEnhancementConfigurationSection.allCases) { section in
+                self.aiConfigurationSectionButton(section)
+            }
+        }
+        .padding(4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(self.theme.palette.contentBackground.opacity(0.78))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(self.theme.palette.cardBorder.opacity(0.24), lineWidth: 1)
+                )
+        )
+        .frame(maxWidth: .infinity, alignment: .center)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func aiConfigurationSectionButton(_ section: AIEnhancementConfigurationSection) -> some View {
+        let isSelected = self.selectedConfigurationSection == section
+        let isHovering = self.hoveredConfigurationSection == section
+        let tone = self.theme.palette.accent
+        let shape = Capsule(style: .continuous)
+
+        return Button {
+            self.selectedConfigurationSection = section
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: section.systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(section.title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(isSelected ? tone : (isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
+            .frame(width: 176, height: 36)
+            .contentShape(shape)
+            .background(
+                shape
+                    .fill(isSelected ? tone.opacity(0.13) : (isHovering ? self.theme.palette.cardBackground.opacity(0.66) : .clear))
+                    .overlay(
+                        shape
+                            .stroke(isSelected ? tone.opacity(0.46) : (isHovering ? self.theme.palette.cardBorder.opacity(0.36) : .clear), lineWidth: 1)
+                    )
+                    .shadow(color: isSelected ? tone.opacity(0.18) : .clear, radius: 8, x: 0, y: 2)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(section.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .onHover { hovering in
+            self.hoveredConfigurationSection = hovering ? section : nil
+        }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(.easeOut(duration: 0.12), value: isSelected)
+    }
+
+    private var providerConfigurationContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.aiSetupSummaryBar
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Providers")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Configure local models and API providers.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button(action: { self.viewModel.showHelp.toggle() }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: self.viewModel.showHelp ? "questionmark.circle.fill" : "questionmark.circle")
+                            .font(.system(size: 14))
+                        Text("Help")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.accent : .secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.12) : self.theme.palette.cardBackground.opacity(0.8))
+                            .overlay(
+                                Capsule()
+                                    .stroke(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.4), lineWidth: 1)
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            if self.viewModel.showHelp { self.helpSectionView }
+
+            self.providerStepContent
         }
     }
 
@@ -146,13 +215,13 @@ extension AIEnhancementSettingsView {
                 self.aiSetupSummaryDivider
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
                 self.aiSetupSummaryDivider
-                self.aiSetupSummaryItem(icon: "slider.horizontal.3", text: "AI Enhancement enables dictation prompts")
+                self.aiSetupSummaryItem(icon: "keyboard", text: "Shortcuts choose when prompts run")
             }
 
             VStack(alignment: .leading, spacing: 7) {
                 self.aiSetupSummaryItem(icon: "cpu", text: "Local models run on Mac")
                 self.aiSetupSummaryItem(icon: "cloud", text: "Cloud models use provider APIs")
-                self.aiSetupSummaryItem(icon: "slider.horizontal.3", text: "AI Enhancement enables dictation prompts")
+                self.aiSetupSummaryItem(icon: "keyboard", text: "Shortcuts choose when prompts run")
             }
         }
         .padding(.horizontal, 2)
@@ -756,7 +825,10 @@ extension AIEnhancementSettingsView {
 
         guard !self.privateAILoadState.isDownloading(model.id) else { return }
 
-        self.privateAILoadState = .downloading(modelID: model.id, progress: nil)
+        self.privateAILoadState = .downloading(
+            modelID: model.id,
+            progress: PrivateAIModelDownloadProgress(initialExpectedBytes: model.artifact.byteCount)
+        )
         Task { @MainActor in
             do {
                 DebugLogger.shared.info(
@@ -768,7 +840,7 @@ extension AIEnhancementSettingsView {
                         guard self.privateAISelectedModelID == model.id else { return }
                         self.privateAILoadState = .downloading(
                             modelID: model.id,
-                            progress: progress
+                            progress: progress.withFallbackExpectedBytes(model.artifact.byteCount)
                         )
                     }
                 }
@@ -1706,7 +1778,7 @@ extension AIEnhancementSettingsView {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(self.theme.palette.accent)
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text("Prompts & Advanced")
+                    Text("Advanced Prompts")
                         .font(.system(size: 14, weight: .semibold))
                     Text(" - Choose how to process your speech — email, code, terminal, and more")
                         .font(.caption)

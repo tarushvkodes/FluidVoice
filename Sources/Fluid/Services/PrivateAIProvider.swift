@@ -14,9 +14,43 @@ struct PrivateAIModelDownloadProgress: Sendable, Equatable {
     var totalBytesWritten: Int64
     var totalBytesExpected: Int64?
 
+    init(bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpected: Int64?) {
+        self.bytesWritten = bytesWritten
+        self.totalBytesWritten = totalBytesWritten
+        self.totalBytesExpected = totalBytesExpected
+    }
+
+    init(initialExpectedBytes: Int64?) {
+        self.init(
+            bytesWritten: 0,
+            totalBytesWritten: 0,
+            totalBytesExpected: initialExpectedBytes.flatMap { $0 > 0 ? $0 : nil }
+        )
+    }
+
+    var hasWrittenBytes: Bool {
+        self.totalBytesWritten > 0
+    }
+
     var fractionCompleted: Double? {
+        guard self.hasWrittenBytes else { return nil }
         guard let totalBytesExpected, totalBytesExpected > 0 else { return nil }
         return min(1, max(0, Double(self.totalBytesWritten) / Double(totalBytesExpected)))
+    }
+
+    func withFallbackExpectedBytes(_ byteCount: Int64?) -> PrivateAIModelDownloadProgress {
+        guard self.totalBytesExpected == nil,
+              let byteCount,
+              byteCount > 0
+        else {
+            return self
+        }
+
+        return PrivateAIModelDownloadProgress(
+            bytesWritten: self.bytesWritten,
+            totalBytesWritten: self.totalBytesWritten,
+            totalBytesExpected: byteCount
+        )
     }
 }
 
@@ -30,6 +64,9 @@ enum PrivateAIModelDownloadProgressText {
         guard let progress else {
             return "Starting download. This can take a few minutes."
         }
+        guard progress.hasWrittenBytes else {
+            return "Downloading. This can take a few minutes."
+        }
         guard let fraction = progress.fractionCompleted else {
             return "Downloading. This can take a few minutes."
         }
@@ -38,6 +75,11 @@ enum PrivateAIModelDownloadProgressText {
 
     static func byteText(for progress: PrivateAIModelDownloadProgress?) -> String? {
         guard let progress else { return nil }
+
+        guard progress.hasWrittenBytes else {
+            guard let expected = progress.totalBytesExpected, expected > 0 else { return nil }
+            return "\(Self.byteCountText(expected)) download"
+        }
 
         let written = Self.byteCountText(progress.totalBytesWritten)
         guard let expected = progress.totalBytesExpected, expected > 0 else {
@@ -50,6 +92,7 @@ enum PrivateAIModelDownloadProgressText {
     static func detailText(for progress: PrivateAIModelDownloadProgress?) -> String {
         guard let progress else { return "Starting download..." }
         guard let byteText = Self.byteText(for: progress) else { return "Downloading..." }
+        guard progress.hasWrittenBytes else { return byteText }
         guard let fraction = progress.fractionCompleted else { return byteText }
         return "\(byteText) (\(Int(fraction * 100))%)"
     }

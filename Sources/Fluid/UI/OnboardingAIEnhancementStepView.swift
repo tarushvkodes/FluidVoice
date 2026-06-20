@@ -146,7 +146,7 @@ struct OnboardingAIEnhancementStepView: View {
 
     private var primaryPrivateAIButtonTitle: String {
         if self.isDownloadingPrivateAI {
-            return "Downloading"
+            return PrivateAIModelDownloadProgressText.buttonTitle(for: self.privateAISetupProgress)
         }
         if self.isLoadingPrivateAI {
             return "Loading..."
@@ -886,8 +886,10 @@ struct OnboardingAIEnhancementStepView: View {
                     .frame(height: 4)
             } else {
                 ProgressView()
+                    .progressViewStyle(.linear)
                     .controlSize(.small)
                     .tint(FluidOnboardingLandingColors.blue)
+                    .frame(height: 4)
             }
         }
         .padding(.top, 2)
@@ -1175,7 +1177,7 @@ struct OnboardingAIEnhancementStepView: View {
         let model = self.privateAIModel
         let actionID = self.beginPrivateAIAction()
         self.privateAISetupErrorMessage = nil
-        self.privateAISetupProgress = nil
+        self.privateAISetupProgress = PrivateAIModelDownloadProgress(initialExpectedBytes: model.artifact.byteCount)
         self.isDownloadingPrivateAI = true
 
         self.privateAIActionTask = Task { @MainActor in
@@ -1183,7 +1185,7 @@ struct OnboardingAIEnhancementStepView: View {
                 _ = try await PrivateAIIntegrationService.prepareModel(model) { progress in
                     await MainActor.run {
                         guard self.privateAIActionID == actionID else { return }
-                        self.privateAISetupProgress = progress
+                        self.privateAISetupProgress = progress.withFallbackExpectedBytes(model.artifact.byteCount)
                     }
                 }
                 guard self.privateAIActionID == actionID, !Task.isCancelled else { return }
