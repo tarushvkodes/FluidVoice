@@ -378,8 +378,10 @@ final class SettingsStore: ObservableObject {
 
     func dictationPromptConfigurationKey(for selection: DictationPromptSelection) -> String? {
         switch selection {
-        case .off, .privateAI:
+        case .off:
             return nil
+        case .privateAI:
+            return "__privateAI__"
         case .default:
             return "__default__"
         case let .profile(promptID):
@@ -389,6 +391,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func dictationPromptSelection(forConfigurationKey key: String) -> DictationPromptSelection? {
+        if key == "__privateAI__" {
+            return .privateAI
+        }
         if key == "__default__" {
             return .default
         }
@@ -436,6 +441,9 @@ final class SettingsStore: ObservableObject {
             guard let shortcut = configuration.shortcut else { return nil }
             if key == "__default__" {
                 return (.default, shortcut)
+            }
+            if key == "__privateAI__" {
+                return (.privateAI, shortcut)
             }
             if key.hasPrefix("profile:") {
                 let id = String(key.dropFirst("profile:".count))
@@ -570,7 +578,9 @@ final class SettingsStore: ObservableObject {
 
     func resolvedDictationPromptProfile(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptProfile? {
         switch self.dictationPromptSelection(for: slot) {
-        case .off, .privateAI:
+        case .off:
+            return nil
+        case .privateAI:
             return nil
         case let .profile(promptID):
             return self.dictationPromptProfiles.first(where: { $0.id == promptID && $0.mode.normalized == .dictate })
@@ -2918,10 +2928,13 @@ final class SettingsStore: ObservableObject {
             let isLegacyPlaceholder = profile.mode.normalized == .dictate &&
                 name.caseInsensitiveCompare("Blocked") == .orderedSame &&
                 prompt.caseInsensitiveCompare("Blocked prompt") == .orderedSame
-            if isLegacyPlaceholder {
+            let isAccidentalPrivateAIProfile = profile.mode.normalized == .dictate &&
+                name.caseInsensitiveCompare(PrivateAIProviderFeature.displayName) == .orderedSame &&
+                prompt.isEmpty
+            if isLegacyPlaceholder || isAccidentalPrivateAIProfile {
                 didChangeProfiles = true
             }
-            return isLegacyPlaceholder
+            return isLegacyPlaceholder || isAccidentalPrivateAIProfile
         }
         if didChangeProfiles {
             self.dictationPromptProfiles = normalizedProfiles
@@ -3014,7 +3027,7 @@ final class SettingsStore: ObservableObject {
 
     private func normalizeDictationPromptConfigurationsIfNeeded() {
         let validKeys = Set(
-            ["__default__"] + self.dictationPromptProfiles
+            ["__default__", "__privateAI__"] + self.dictationPromptProfiles
                 .filter { $0.mode.normalized == .dictate }
                 .map { "profile:\($0.id)" }
         )

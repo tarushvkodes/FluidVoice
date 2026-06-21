@@ -153,6 +153,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func loadSettings() {
         self.settings.normalizeProviderSelectionForCurrentVerificationState()
+        self.settings.reconcilePromptStateAfterProfileChanges()
         self.selectedProviderID = self.settings.selectedProviderID
 
         self.availableModelsByProvider = self.settings.availableModelsByProvider
@@ -1639,6 +1640,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.promptEditorMode = .newPrompt(prefillMode: self.draftPromptMode)
     }
 
+    func openPrivateAIPromptEditor() {
+        self.draftPromptMode = .dictate
+        self.draftPromptName = PrivateAIProviderFeature.displayName
+        self.draftPromptText = ""
+        self.promptEditorSessionID = UUID()
+        self.promptEditorMode = .privateAI
+    }
+
     func openEditor(for profile: SettingsStore.DictationPromptProfile) {
         self.draftPromptMode = profile.mode.normalized
         self.draftIncludeContext = (self.draftPromptMode == .edit) ? true : profile.includeContext
@@ -1659,6 +1668,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func savePromptEditor(mode: PromptEditorMode) {
+        if mode.isPrivateAI {
+            self.settings.reconcilePromptStateAfterProfileChanges()
+            self.dictationPromptProfiles = self.settings.dictationPromptProfiles
+            self.appPromptBindings = self.settings.appPromptBindings
+            self.closePromptEditor()
+            return
+        }
+
         // Default prompt is non-deletable; save it via the optional override (empty is allowed).
         if mode.isDefault {
             let body = SettingsStore.stripBasePrompt(for: self.draftPromptMode, from: self.draftPromptText)

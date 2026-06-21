@@ -1284,8 +1284,6 @@ struct ContentView: View {
             hotkeyShortcut: self.$hotkeyShortcut,
             activeShortcutRecordingTarget: self.$activeShortcutRecordingTarget,
             shortcutRecordingMessage: self.$shortcutRecordingMessage,
-            promptModeShortcut: self.$promptModeHotkeyShortcut,
-            promptModeShortcutEnabled: self.$isPromptModeShortcutEnabled,
             commandModeShortcut: self.$commandModeHotkeyShortcut,
             rewriteShortcut: self.$rewriteModeHotkeyShortcut,
             cancelRecordingShortcut: self.$cancelRecordingHotkeyShortcut,
@@ -3283,10 +3281,18 @@ extension ContentView {
     }
 
     private func applyDictationPromptConfiguration(for selection: SettingsStore.DictationPromptSelection) {
-        let configuration = SettingsStore.shared.dictationPromptConfiguration(for: selection)
-        let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let modelName = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !providerID.isEmpty, !modelName.isEmpty else { return }
+        let providerID: String
+        let modelName: String
+
+        if selection == .privateAI {
+            providerID = PrivateAIProviderFeature.shared.providerID
+            modelName = PrivateAIModelRegistry.defaultModelID
+        } else {
+            let configuration = SettingsStore.shared.dictationPromptConfiguration(for: selection)
+            providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+            modelName = configuration.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !providerID.isEmpty, !modelName.isEmpty else { return }
+        }
 
         let providerKey = self.providerKey(for: providerID)
         SettingsStore.shared.selectedProviderID = providerID
@@ -3344,7 +3350,7 @@ extension ContentView {
     }
 
     private var onboardingAIReady: Bool {
-        self.settings.onboardingAISkipped || DictationAIPostProcessingGate.isConfigured()
+        self.settings.onboardingAISkipped || DictationAIPostProcessingGate.isProviderConfigured()
     }
 
     private var onboardingPlaygroundReady: Bool {

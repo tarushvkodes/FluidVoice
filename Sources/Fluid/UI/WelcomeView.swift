@@ -39,7 +39,7 @@ struct WelcomeView: View {
     private var editModeColor: Color { self.theme.palette.accent }
 
     private var isAIEnhancementReady: Bool {
-        DictationAIPostProcessingGate.isConfigured()
+        DictationAIPostProcessingGate.isProviderConfigured()
     }
 
     var body: some View {
@@ -809,7 +809,7 @@ struct OnboardingFlowView: View {
     }
 
     private var isAIReady: Bool {
-        self.settings.onboardingAISkipped || DictationAIPostProcessingGate.isConfigured()
+        self.settings.onboardingAISkipped || DictationAIPostProcessingGate.isProviderConfigured()
     }
 
     private var isPlaygroundReady: Bool {

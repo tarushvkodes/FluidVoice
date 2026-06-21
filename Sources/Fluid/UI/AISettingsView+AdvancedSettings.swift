@@ -28,56 +28,15 @@ extension AIEnhancementSettingsView {
     // MARK: - Advanced Settings Card
 
     var advancedSettingsCard: some View {
-        ThemedCard(style: .prominent, hoverEffect: false) {
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .center, spacing: 12) {
-                        Text("Prompt Profiles")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(self.theme.palette.primaryText)
-                            .lineLimit(1)
-
-                        Button {
-                            self.isPromptProfilesHelpPresented.toggle()
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(self.theme.palette.secondaryText.opacity(0.78))
-                                .frame(width: 22, height: 22)
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("About prompt profiles")
-                        .popover(isPresented: self.$isPromptProfilesHelpPresented, arrowEdge: .top) {
-                            self.promptProfilesHelpPopover
-                        }
-
-                        Spacer(minLength: 12)
-
-                        if !self.viewModel.isPrivateAIModelSelected() {
-                            Button {
-                                self.viewModel.openNewPromptEditor(prefillMode: .dictate)
-                            } label: {
-                                Label("Add Prompt", systemImage: "plus")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
-                            }
-                            .fluidCompactButton(isReady: true, foreground: Color.fluidGreen, borderColor: Color.fluidGreen.opacity(0.5))
-                        }
-                    }
-
-                    self.promptModeViewport(mode: .dictate)
-                }
-                .padding(.horizontal, 4)
-            }
-            .padding(14)
+        VStack(alignment: .leading, spacing: 14) {
+            self.promptModeViewport(mode: .dictate)
         }
         .sheet(item: self.$viewModel.promptEditorMode) { mode in
             self.promptEditorSheet(mode: mode)
         }
     }
 
-    private var promptProfilesHelpPopover: some View {
+    var promptProfilesHelpPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 9) {
                 Image(systemName: "text.bubble.fill")
@@ -104,7 +63,7 @@ extension AIEnhancementSettingsView {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                self.promptProfilesHelpRow("Default is the normal built-in prompt.")
+                self.promptProfilesHelpRow("Built-in is the normal prompt. Assign any prompt as Primary to use it with your main hotkey.")
                 self.promptProfilesHelpRow("\(PrivateAIProviderFeature.displayName) uses its own local prompt.")
                 self.promptProfilesHelpRow("Custom prompts can be assigned globally, by app, or by shortcut.")
             }
@@ -180,24 +139,6 @@ extension AIEnhancementSettingsView {
                 Spacer(minLength: 10)
 
                 HStack(spacing: 8) {
-                    if let assignments, !assignments.isDefault {
-                        Button {
-                            assignments.onMakeDefault()
-                        } label: {
-                            Label("Set Default", systemImage: "checkmark.circle")
-                                .font(.system(size: 12, weight: .semibold))
-                                .labelStyle(.titleAndIcon)
-                                .lineLimit(1)
-                                .frame(minWidth: 106, minHeight: AISettingsLayout.controlHeight)
-                        }
-                        .fluidCompactButton(
-                            isReady: false,
-                            foreground: Color.fluidGreen,
-                            borderColor: Color.fluidGreen.opacity(0.62)
-                        )
-                        .disabled(!isEnabled)
-                    }
-
                     if let onManage {
                         Button {
                             onManage()
@@ -222,6 +163,9 @@ extension AIEnhancementSettingsView {
                         .buttonStyle(SquareIconButtonStyle(foreground: .red, borderColor: .red.opacity(0.5)))
                         .disabled(!isEnabled)
                         .help("Delete")
+                    } else {
+                        Color.clear
+                            .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
                     }
                 }
                 .fixedSize(horizontal: true, vertical: false)
@@ -425,16 +369,6 @@ extension AIEnhancementSettingsView {
         mode: SettingsStore.PromptMode,
         tone: Color
     ) -> some View {
-        if assignments?.isDefault == true {
-            Text("Default")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
-                .foregroundStyle(Color.fluidGreen)
-        }
-
         if assignments == nil, isSelected {
             Text("Selected")
                 .font(.caption2)
@@ -504,6 +438,8 @@ extension AIEnhancementSettingsView {
             return .profile(promptID)
         case .newPrompt:
             return nil
+        case .privateAI:
+            return .privateAI
         }
     }
 
@@ -535,6 +471,11 @@ extension AIEnhancementSettingsView {
         self.promptEditorModelDraft = configuration?.modelName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if self.promptEditorModelDraft.isEmpty, !self.promptEditorProviderIDDraft.isEmpty {
             self.promptEditorModelDraft = self.viewModel.selectedModel(for: self.promptEditorProviderIDDraft)
+        }
+
+        if mode.isPrivateAI {
+            self.promptEditorProviderIDDraft = PrivateAIProviderFeature.shared.providerID
+            self.promptEditorModelDraft = PrivateAIIntegrationService.configuredModelID
         }
 
         if mode.isDefault, let promptMode = mode.mode {
@@ -653,17 +594,21 @@ extension AIEnhancementSettingsView {
         if case .newPrompt = mode {
             return self.viewModel.draftPromptMode.normalized == .dictate
         }
+        if case .privateAI = mode {
+            return true
+        }
         return self.promptEditorSelection(for: mode) != nil
     }
 
     private func promptEditorConfigurationPanel(mode: PromptEditorMode) -> some View {
         Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 14) {
-            if !mode.isNewPrompt {
-                self.promptEditorDefaultRow(mode: mode)
-            }
             self.promptEditorShortcutRow(mode: mode)
-            self.promptEditorProviderRow
-            self.promptEditorModelRow
+            Group {
+                self.promptEditorProviderRow
+                self.promptEditorModelRow
+            }
+            .disabled(mode.isPrivateAI)
+            .opacity(mode.isPrivateAI ? 0.6 : 1)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -675,27 +620,6 @@ extension AIEnhancementSettingsView {
                         .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                 )
         )
-    }
-
-    private func promptEditorDefaultRow(mode: PromptEditorMode) -> some View {
-        self.promptEditorConfigRow(title: "Default key", description: "Uses the main dictation shortcut.") {
-            if let assignments = self.promptEditorAssignments(mode: mode) {
-                Button {
-                    assignments.onMakeDefault()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: assignments.isDefault ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(assignments.isDefault ? "Default" : "Make default")
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: AISettingsLayout.controlHeight)
-                }
-                .fluidCompactButton(isReady: assignments.isDefault)
-            }
-        }
     }
 
     private func promptEditorShortcutRow(mode: PromptEditorMode) -> some View {
@@ -721,7 +645,7 @@ extension AIEnhancementSettingsView {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.orange)
                         Text("Press shortcut...")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.orange)
                             .lineLimit(1)
                     } else if let shortcut = self.promptEditorShortcutDraft {
@@ -729,7 +653,7 @@ extension AIEnhancementSettingsView {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(self.theme.palette.secondaryText)
                         Text(shortcut.displayString)
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .foregroundStyle(self.theme.palette.primaryText)
                             .lineLimit(1)
                     } else {
@@ -737,18 +661,17 @@ extension AIEnhancementSettingsView {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(self.theme.palette.tertiaryText)
                         Text("None")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(self.theme.palette.tertiaryText)
                     }
                     Spacer(minLength: 4)
                 }
                 .searchablePickerControlChrome(
-                    width: AISettingsLayout.promptEditorControlColumnWidth,
+                    width: 114,
                     height: AISettingsLayout.controlHeight,
                     usesMaterial: true,
                     showsShadow: true
                 )
-                .layoutPriority(1)
 
                 Button {
                     self.shortcutRecordingMessage = nil
@@ -761,8 +684,7 @@ extension AIEnhancementSettingsView {
                     Text(isRecording ? "Recording..." : "Change")
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
-                        .frame(minWidth: AISettingsLayout.compactActionMinWidth)
-                        .frame(height: AISettingsLayout.controlHeight)
+                        .frame(width: 70, height: AISettingsLayout.controlHeight)
                 }
                 .fluidCompactButton(isReady: !isRecording)
                 .disabled(isRecording)
@@ -781,13 +703,15 @@ extension AIEnhancementSettingsView {
                         Text("Clear")
                             .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
-                            .frame(minWidth: AISettingsLayout.compactActionMinWidth)
-                            .frame(height: AISettingsLayout.controlHeight)
+                            .frame(width: 70, height: AISettingsLayout.controlHeight)
                     }
                     .fluidCompactButton(foreground: .red, borderColor: .red.opacity(0.5))
+                } else {
+                    Color.clear
+                        .frame(width: 70, height: AISettingsLayout.controlHeight)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: AISettingsLayout.promptEditorControlColumnWidth, alignment: .leading)
         }
     }
 
@@ -834,16 +758,25 @@ extension AIEnhancementSettingsView {
 
     private var promptEditorModelRow: some View {
         self.promptEditorConfigRow(title: "Model", description: "Used for this prompt.") {
-            SearchableModelPicker(
-                models: self.viewModel.models(for: self.promptEditorProviderIDDraft),
-                selectedModel: self.promptEditorModelBinding,
-                onRefresh: { await self.viewModel.fetchModels(for: self.promptEditorProviderIDDraft) },
-                isRefreshing: self.viewModel.refreshingProviderID == self.promptEditorProviderIDDraft,
-                refreshEnabled: self.canFetchModels(for: self.promptEditorProviderIDDraft),
-                selectionEnabled: !self.viewModel.models(for: self.promptEditorProviderIDDraft).isEmpty,
-                controlWidth: AISettingsLayout.promptEditorControlColumnWidth,
-                controlHeight: AISettingsLayout.controlHeight
-            )
+            HStack(spacing: 8) {
+                SearchableModelPicker(
+                    models: self.viewModel.models(for: self.promptEditorProviderIDDraft),
+                    selectedModel: self.promptEditorModelBinding,
+                    onRefresh: nil,
+                    selectionEnabled: !self.viewModel.models(for: self.promptEditorProviderIDDraft).isEmpty,
+                    controlWidth: AISettingsLayout.promptEditorControlColumnWidth - AISettingsLayout.providerRowControlHeight - 8,
+                    controlHeight: AISettingsLayout.controlHeight
+                )
+
+                self.companionIconButton(
+                    isRefreshing: self.viewModel.refreshingProviderID == self.promptEditorProviderIDDraft,
+                    disabled: !self.canFetchModels(for: self.promptEditorProviderIDDraft),
+                    opacity: self.canFetchModels(for: self.promptEditorProviderIDDraft) ? 1 : 0.45,
+                    help: "Refresh model list"
+                ) {
+                    Task { await self.viewModel.fetchModels(for: self.promptEditorProviderIDDraft) }
+                }
+            }
         }
     }
 
@@ -865,11 +798,11 @@ extension AIEnhancementSettingsView {
         GridRow(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.primaryText)
                 Text(description)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1009,7 +942,6 @@ extension AIEnhancementSettingsView {
             .filter { $0.mode.normalized == mode }
         let isPrivateAI = mode.normalized == .dictate && self.viewModel.isPrivateAIModelSelected()
         let isSelectedAppsOnly = !isPrivateAI && self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly
-        let isPromptRoutingPaused = self.viewModel.isPromptSelectionOff(for: mode)
 
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 10) {
@@ -1022,6 +954,7 @@ extension AIEnhancementSettingsView {
                         mode: mode,
                         isSelected: true,
                         assignments: self.promptAssignments(selection: privateAISelection, isPrivateAI: true),
+                        onManage: { self.viewModel.openPrivateAIPromptEditor() },
                         isEnabled: true
                     )
 
@@ -1029,10 +962,16 @@ extension AIEnhancementSettingsView {
                 } else {
                     self.promptRoutingScopeRow(mode: mode)
 
-                    if isSelectedAppsOnly {
-                        self.selectedAppsOnlySummary(mode: mode)
-                        self.appPromptBindingsSection(mode: mode, isEmphasized: true, isEnabled: !isPromptRoutingPaused)
-                    } else {
+                    Text(isSelectedAppsOnly
+                        ? "Custom prompts only run in apps listed in App Overrides."
+                        : "Custom prompts run based on your shortcut or the app you're in."
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 2)
+
+                    Group {
                         let defaultSelection = SettingsStore.DictationPromptSelection.default
                         self.promptProfileCard(
                             cardKey: "\(mode.normalized.rawValue)-default",
@@ -1040,13 +979,13 @@ extension AIEnhancementSettingsView {
                             subtitle: "",
                             mode: mode,
                             isSelected: mode.normalized == .dictate
-                                ? (!self.viewModel.isPrimaryDictationPromptSelectionOff() && self.viewModel.selectedPromptID(for: mode) == nil)
-                                : (!isPromptRoutingPaused && self.viewModel.selectedPromptID(for: mode) == nil),
+                                ? (self.viewModel.selectedPromptID(for: mode) == nil)
+                                : (self.viewModel.selectedPromptID(for: mode) == nil),
                             assignments: mode.normalized == .dictate
                                 ? self.promptAssignments(selection: defaultSelection)
                                 : nil,
                             onManage: { self.viewModel.openDefaultPromptViewer(for: mode) },
-                            isEnabled: !isPromptRoutingPaused
+                            isEnabled: !isSelectedAppsOnly
                         )
 
                         if !customProfiles.isEmpty {
@@ -1057,26 +996,22 @@ extension AIEnhancementSettingsView {
                                     title: profile.name.isEmpty ? "Untitled Prompt" : profile.name,
                                     subtitle: "",
                                     mode: profile.mode,
-                                    isSelected: !isPromptRoutingPaused && self.viewModel.selectedPromptID(for: profile.mode) == profile.id,
+                                    isSelected: self.viewModel.selectedPromptID(for: profile.mode) == profile.id,
                                     assignments: profile.mode.normalized == .dictate
                                         ? self.promptAssignments(selection: profileSelection)
                                         : nil,
                                     onManage: { self.viewModel.openEditor(for: profile) },
                                     onDelete: { self.viewModel.requestDeletePrompt(profile) },
-                                    isEnabled: !isPromptRoutingPaused
+                                    isEnabled: !isSelectedAppsOnly
                                 )
                             }
                         }
-
-                        if self.viewModel.promptRoutingScope(for: mode) == .selectedAppsOnly {
-                            self.appPromptBindingsSection(mode: mode, isEnabled: !isPromptRoutingPaused)
-                        }
                     }
+                    .opacity(isSelectedAppsOnly ? 0.5 : 1)
+
+                    self.appPromptBindingsSection(mode: mode, isEmphasized: isSelectedAppsOnly, isEnabled: true)
                 }
             }
-            .opacity(isPromptRoutingPaused ? 0.34 : 1)
-            .grayscale(isPromptRoutingPaused ? 0.75 : 0)
-            .allowsHitTesting(!isPromptRoutingPaused)
         }
         .padding(.top, 2)
     }
@@ -1120,11 +1055,6 @@ extension AIEnhancementSettingsView {
 
     private func promptRoutingScopeRow(mode: SettingsStore.PromptMode) -> some View {
         HStack(alignment: .center, spacing: 10) {
-            Text("Scope")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .frame(width: AISettingsLayout.promptScopeLabelWidth, alignment: .leading)
-
             HStack(spacing: 4) {
                 self.promptRoutingScopeButton(
                     title: "All apps",
@@ -1151,9 +1081,15 @@ extension AIEnhancementSettingsView {
 
             if mode.normalized == .edit {
                 self.editModeInlineModelControls
-            } else {
-                Color.clear
-                    .frame(height: AISettingsLayout.controlHeight)
+            } else if !self.viewModel.isPrivateAIModelSelected() {
+                Button {
+                    self.viewModel.openNewPromptEditor(prefillMode: .dictate)
+                } label: {
+                    Label("Add Prompt", systemImage: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
+                }
+                .fluidCompactButton(isReady: true, foreground: Color.fluidGreen, borderColor: Color.fluidGreen.opacity(0.5))
             }
         }
         .frame(minHeight: AISettingsLayout.controlHeight)
@@ -1336,11 +1272,18 @@ extension AIEnhancementSettingsView {
         let modeProfiles = self.viewModel.dictationPromptProfiles
             .filter { $0.mode.normalized == mode.normalized }
 
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+
             HStack(alignment: .center, spacing: 10) {
-                Text("App Overrides")
+                Image(systemName: "app.dashed")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(self.theme.palette.secondaryText)
+                Text("App Overrides")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.secondaryText)
+
+                Spacer(minLength: 8)
 
                 Menu {
                     if appTargets.isEmpty {
@@ -1366,17 +1309,10 @@ extension AIEnhancementSettingsView {
                     Text("+ Add App")
                 }
                 .fluidCompactButton(isReady: true)
-                .frame(minHeight: 26)
+                .frame(minHeight: AISettingsLayout.controlHeight)
                 .disabled(!isEnabled)
                 .opacity(isEnabled ? 1 : 0.48)
-
-                Spacer(minLength: 8)
             }
-
-            Text(isEmphasized ? "Use prompts only in selected apps." : "Use a different prompt only in selected apps.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 4)
 
             if bindings.isEmpty {
                 Text("No app overrides yet. Add one to use a different prompt for a specific app.")
@@ -1394,7 +1330,7 @@ extension AIEnhancementSettingsView {
                 }
             }
         }
-        .padding(.top, isEmphasized ? 2 : 6)
+        .padding(.top, 4)
     }
 
     @ViewBuilder
@@ -1404,83 +1340,92 @@ extension AIEnhancementSettingsView {
         modeProfiles: [SettingsStore.DictationPromptProfile],
         isEnabled: Bool = true
     ) -> some View {
-        HStack(spacing: 10) {
-            self.appIconView(bundleID: binding.appBundleID)
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(binding.appName)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.primaryText)
-                    .lineLimit(1)
-                Text(binding.appBundleID)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+        return VStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                self.appIconView(bundleID: binding.appBundleID)
+                    .frame(width: 34, height: 34)
 
-            Spacer(minLength: 8)
-
-            Menu {
-                Button("Default") {
-                    self.viewModel.setPromptID(nil, for: binding)
-                }
-
-                Divider()
-
-                Button("Create New Prompt…") {
-                    self.viewModel.openNewPromptEditor(prefillMode: mode)
-                }
-
-                if !modeProfiles.isEmpty {
-                    Divider()
-                    ForEach(modeProfiles) { profile in
-                        Button(profile.name.isEmpty ? "Untitled Prompt" : profile.name) {
-                            self.viewModel.setPromptID(profile.id, for: binding)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(self.viewModel.promptName(for: mode, promptID: binding.promptID))
-                        .font(.caption)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(binding.appName)
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(self.theme.palette.primaryText)
                         .lineLimit(1)
+                    Text(binding.appBundleID)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.theme.palette.cardBackground)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder, lineWidth: 1)
-                        )
-                )
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize(horizontal: true, vertical: false)
-            .disabled(!isEnabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button {
-                guard isEnabled else { return }
-                self.viewModel.removeAppPromptBinding(binding)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.red.opacity(0.9))
+                Spacer(minLength: 10)
+
+                HStack(spacing: 8) {
+                    Menu {
+                        Button("Default") {
+                            self.viewModel.setPromptID(nil, for: binding)
+                        }
+
+                        Divider()
+
+                        Button("Create New Prompt…") {
+                            self.viewModel.openNewPromptEditor(prefillMode: mode)
+                        }
+
+                        if !modeProfiles.isEmpty {
+                            Divider()
+                            ForEach(modeProfiles) { profile in
+                                Button(profile.name.isEmpty ? "Untitled Prompt" : profile.name) {
+                                    self.viewModel.setPromptID(profile.id, for: binding)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(self.viewModel.promptName(for: mode, promptID: binding.promptID))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(self.theme.palette.primaryText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 4)
+                            FluidPickerDisclosureIcon(backgroundOpacity: 0.6)
+                        }
+                        .searchablePickerControlChrome(
+                            width: 200,
+                            height: AISettingsLayout.controlHeight,
+                            usesMaterial: false,
+                            showsShadow: false
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isEnabled)
+
+                    Button {
+                        guard isEnabled else { return }
+                        self.viewModel.removeAppPromptBinding(binding)
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
+                    }
+                    .buttonStyle(SquareIconButtonStyle(foreground: .red, borderColor: .red.opacity(0.5)))
+                    .disabled(!isEnabled)
+                    .help("Remove app-specific override")
+                }
+                .fixedSize(horizontal: true, vertical: false)
             }
-            .buttonStyle(.plain)
-            .disabled(!isEnabled)
-            .help("Remove app-specific override")
         }
-        .opacity(isEnabled ? 1 : 0.48)
-        .padding(8)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .frame(minHeight: 86)
+        .opacity(isEnabled ? 1 : 0.68)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(self.theme.palette.cardBackground)
+            shape
+                .fill(Color(nsColor: .controlBackgroundColor))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                    shape
+                        .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
                 )
         )
     }
@@ -1686,12 +1631,16 @@ extension AIEnhancementSettingsView {
                         case let .defaultPrompt(promptMode): return "Default \(self.friendlyModeName(promptMode)) Prompt"
                         case let .newPrompt(prefillMode): return "New \(self.friendlyModeName(prefillMode)) Prompt"
                         case .edit: return "Edit Prompt"
+                        case .privateAI: return PrivateAIProviderFeature.displayName
                         }
                     }())
                         .font(.headline)
-                    Text(mode.isDefault
-                        ? "This is the built-in prompt. Create a custom prompt to override it."
-                        : "Prompt text is appended to the hidden base prompt for the selected mode."
+                    Text(mode.isPrivateAI
+                        ? "Built-in system prompt. Only the shortcut can be customized."
+                        : (mode.isDefault
+                            ? "This is the built-in prompt. Create a custom prompt to override it."
+                            : "Prompt text is appended to the hidden base prompt for the selected mode."
+                        )
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1703,39 +1652,43 @@ extension AIEnhancementSettingsView {
                 self.promptEditorConfigurationPanel(mode: mode)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Name")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                let isDefaultNameLocked = mode.isDefault
-                TextField("Prompt name", text: self.$viewModel.draftPromptName)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(isDefaultNameLocked)
+            if !mode.isPrivateAI {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Name")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    let isDefaultNameLocked = mode.isDefault
+                    TextField("Prompt name", text: self.$viewModel.draftPromptName)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(isDefaultNameLocked)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Prompt")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                PromptTextView(
-                    text: self.$viewModel.draftPromptText,
-                    isEditable: true,
-                    font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-                )
-                .id(self.viewModel.promptEditorSessionID)
-                .frame(minHeight: 180)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.theme.palette.contentBackground)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder, lineWidth: 1)
-                        )
-                )
-                .onChange(of: self.viewModel.draftPromptText) { _, newValue in
-                    guard self.viewModel.draftPromptMode == .dictate else { return }
-                    let combined = self.viewModel.combinedDraftPrompt(newValue, mode: self.viewModel.draftPromptMode)
-                    self.promptTest.updateDraftPromptText(combined)
+            if !mode.isPrivateAI {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Prompt")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    PromptTextView(
+                        text: self.$viewModel.draftPromptText,
+                        isEditable: true,
+                        font: NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+                    )
+                    .id(self.viewModel.promptEditorSessionID)
+                    .frame(minHeight: 180)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(self.theme.palette.contentBackground)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(self.theme.palette.cardBorder, lineWidth: 1)
+                            )
+                    )
+                    .onChange(of: self.viewModel.draftPromptText) { _, newValue in
+                        guard self.viewModel.draftPromptMode == .dictate else { return }
+                        let combined = self.viewModel.combinedDraftPrompt(newValue, mode: self.viewModel.draftPromptMode)
+                        self.promptTest.updateDraftPromptText(combined)
+                    }
                 }
             }
 
@@ -1766,7 +1719,7 @@ extension AIEnhancementSettingsView {
 
             // MARK: - Test Mode
 
-            if self.viewModel.draftPromptMode == .dictate {
+            if self.viewModel.draftPromptMode == .dictate && !mode.isPrivateAI {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         Image(systemName: "waveform")
@@ -1968,6 +1921,10 @@ extension AIEnhancementSettingsView {
 
     func openNewPromptEditor(prefillMode: SettingsStore.PromptMode = .edit) {
         self.viewModel.openNewPromptEditor(prefillMode: prefillMode)
+    }
+
+    func openPrivateAIPromptEditor() {
+        self.viewModel.openPrivateAIPromptEditor()
     }
 
     func openEditor(for profile: SettingsStore.DictationPromptProfile) {

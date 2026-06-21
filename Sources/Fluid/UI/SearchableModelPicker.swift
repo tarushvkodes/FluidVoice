@@ -64,11 +64,12 @@ struct SearchableModelPicker: View {
         HStack(spacing: 8) {
             // Model button that opens popover
             Button(action: { self.isShowingPopover.toggle() }) {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Text(self.selectedModel.isEmpty ? "Select Model" : self.selectedModel)
+                        .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .foregroundStyle(self.selectedModel.isEmpty ? .secondary : .primary)
+                        .foregroundStyle(self.selectedModel.isEmpty ? .secondary : self.theme.palette.primaryText)
                     Spacer(minLength: 6)
                     FluidPickerDisclosureIcon(backgroundOpacity: 0.6)
                 }

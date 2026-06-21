@@ -485,7 +485,7 @@ extension AIEnhancementSettingsView {
     /// Shared companion button for provider picker rows — identical size/style everywhere.
     /// Uses a fixed square frame so icon-only buttons don't get horizontal padding from CompactButtonStyle.
     @ViewBuilder
-    private func companionIconButton(
+    func companionIconButton(
         systemName: String,
         help: String,
         action: @escaping () -> Void
@@ -501,7 +501,7 @@ extension AIEnhancementSettingsView {
 
     /// Shared companion button with loading state — for refresh buttons.
     @ViewBuilder
-    private func companionIconButton(
+    func companionIconButton(
         isRefreshing: Bool,
         disabled: Bool = false,
         opacity: Double = 1,
@@ -1850,6 +1850,23 @@ extension AIEnhancementSettingsView {
                     .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
+
+                Button {
+                    self.isPromptProfilesHelpPresented.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(self.theme.palette.secondaryText.opacity(0.78))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("About prompt profiles")
+                .popover(isPresented: self.$isPromptProfilesHelpPresented, arrowEdge: .top) {
+                    self.promptProfilesHelpPopover
+                }
+
+                Spacer()
             }
 
             self.advancedSettingsCard

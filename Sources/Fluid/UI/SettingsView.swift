@@ -36,8 +36,6 @@ struct SettingsView: View {
     @Binding var hotkeyShortcut: HotkeyShortcut
     @Binding var activeShortcutRecordingTarget: ShortcutRecordingTarget?
     @Binding var shortcutRecordingMessage: String?
-    @Binding var promptModeShortcut: HotkeyShortcut
-    @Binding var promptModeShortcutEnabled: Bool
     @Binding var commandModeShortcut: HotkeyShortcut
     @Binding var rewriteShortcut: HotkeyShortcut
     @Binding var cancelRecordingShortcut: HotkeyShortcut
