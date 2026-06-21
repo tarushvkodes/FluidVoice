@@ -62,7 +62,7 @@ extension AIEnhancementSettingsView {
                                     .font(.system(size: 12, weight: .semibold))
                                     .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
                             }
-                            .fluidCompactButton(isReady: true)
+                            .fluidCompactButton(isReady: true, foreground: Color.fluidGreen, borderColor: Color.fluidGreen.opacity(0.5))
                         }
                     }
 
@@ -188,7 +188,7 @@ extension AIEnhancementSettingsView {
                                 .font(.system(size: 12, weight: .semibold))
                                 .labelStyle(.titleAndIcon)
                                 .lineLimit(1)
-                                .frame(minWidth: 106, minHeight: 32)
+                                .frame(minWidth: 106, minHeight: AISettingsLayout.controlHeight)
                         }
                         .fluidCompactButton(
                             isReady: false,
@@ -204,9 +204,9 @@ extension AIEnhancementSettingsView {
                         } label: {
                             Image(systemName: "slider.horizontal.3")
                                 .font(.system(size: 12, weight: .semibold))
-                                .frame(width: 32, height: 32)
+                                .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
                         }
-                        .fluidCompactButton(isReady: false)
+                        .buttonStyle(SquareIconButtonStyle())
                         .disabled(!isEnabled)
                         .help("Configure")
                     }
@@ -217,13 +217,9 @@ extension AIEnhancementSettingsView {
                         } label: {
                             Image(systemName: "trash")
                                 .font(.system(size: 12, weight: .semibold))
-                                .frame(width: 32, height: 32)
+                                .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
                         }
-                        .fluidCompactButton(
-                            isReady: false,
-                            foreground: .red,
-                            borderColor: .red.opacity(0.32)
-                        )
+                        .buttonStyle(SquareIconButtonStyle(foreground: .red, borderColor: .red.opacity(0.5)))
                         .disabled(!isEnabled)
                         .help("Delete")
                     }
@@ -401,7 +397,7 @@ extension AIEnhancementSettingsView {
         .padding(.vertical, 4)
         .background(
             Capsule(style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(self.theme.palette.contentBackground)
                 .overlay(
                     Capsule(style: .continuous)
                         .stroke(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
@@ -430,15 +426,33 @@ extension AIEnhancementSettingsView {
         tone: Color
     ) -> some View {
         if assignments?.isDefault == true {
-            self.promptStatusBadge("Default", systemImage: "checkmark.circle.fill", tone: tone, isProminent: true)
+            Text("Default")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
+                .foregroundStyle(Color.fluidGreen)
         }
 
         if assignments == nil, isSelected {
-            self.promptStatusBadge("Selected", systemImage: "checkmark.circle.fill", tone: tone, isProminent: true)
+            Text("Selected")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
+                .foregroundStyle(Color.fluidGreen)
         }
 
         if mode.normalized == .edit {
-            self.promptStatusBadge("Context: Auto", systemImage: "text.viewfinder", tone: tone, isProminent: false)
+            Text("Context: Auto")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
+                .foregroundStyle(Color.fluidGreen)
         }
     }
 
@@ -655,10 +669,10 @@ extension AIEnhancementSettingsView {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.64))
+                .fill(self.theme.palette.contentBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.32), lineWidth: 1)
+                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                 )
         )
     }
@@ -729,10 +743,10 @@ extension AIEnhancementSettingsView {
                     Spacer(minLength: 4)
                 }
                 .searchablePickerControlChrome(
-                    width: nil,
+                    width: AISettingsLayout.promptEditorControlColumnWidth,
                     height: AISettingsLayout.controlHeight,
-                    usesMaterial: false,
-                    showsShadow: false
+                    usesMaterial: true,
+                    showsShadow: true
                 )
                 .layoutPriority(1)
 
@@ -808,10 +822,10 @@ extension AIEnhancementSettingsView {
                     FluidPickerDisclosureIcon(backgroundOpacity: 0.6)
                 }
                 .searchablePickerControlChrome(
-                    width: nil,
+                    width: AISettingsLayout.promptEditorControlColumnWidth,
                     height: AISettingsLayout.controlHeight,
-                    usesMaterial: false,
-                    showsShadow: false
+                    usesMaterial: true,
+                    showsShadow: true
                 )
             }
             .buttonStyle(.plain)
@@ -941,10 +955,10 @@ extension AIEnhancementSettingsView {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.78))
+                .fill(self.theme.palette.contentBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.22), lineWidth: 1)
+                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                 )
         )
     }
@@ -1082,10 +1096,10 @@ extension AIEnhancementSettingsView {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(self.theme.palette.cardBackground.opacity(0.4))
+                .fill(self.theme.palette.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.2), lineWidth: 1)
+                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                 )
         )
     }
@@ -1126,10 +1140,10 @@ extension AIEnhancementSettingsView {
             .padding(3)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(self.theme.palette.contentBackground.opacity(0.78))
+                    .fill(self.theme.palette.contentBackground)
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(self.theme.palette.cardBorder.opacity(0.22), lineWidth: 1)
+                            .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                     )
             )
 
@@ -1205,10 +1219,10 @@ extension AIEnhancementSettingsView {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(self.theme.palette.cardBackground.opacity(0.34))
+                .fill(self.theme.palette.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.22), lineWidth: 1)
+                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                 )
         )
     }
@@ -1436,10 +1450,10 @@ extension AIEnhancementSettingsView {
                 .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.theme.palette.cardBackground.opacity(0.5))
+                        .fill(self.theme.palette.cardBackground)
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                                .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                         )
                 )
             }
@@ -1463,10 +1477,10 @@ extension AIEnhancementSettingsView {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(self.theme.palette.cardBackground.opacity(0.35))
+                .fill(self.theme.palette.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(self.theme.palette.cardBorder.opacity(0.2), lineWidth: 1)
+                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                 )
         )
     }
@@ -1486,7 +1500,7 @@ extension AIEnhancementSettingsView {
                 .frame(width: 24, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(self.theme.palette.cardBackground.opacity(0.55))
+                        .fill(self.theme.palette.cardBackground)
                 )
         }
     }
@@ -1712,10 +1726,10 @@ extension AIEnhancementSettingsView {
                 .frame(minHeight: 180)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.theme.palette.contentBackground.opacity(0.7))
+                        .fill(self.theme.palette.contentBackground)
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                                .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                         )
                 )
                 .onChange(of: self.viewModel.draftPromptText) { _, newValue in
@@ -1741,10 +1755,10 @@ extension AIEnhancementSettingsView {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(self.theme.palette.contentBackground.opacity(0.7))
+                                .fill(self.theme.palette.contentBackground)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                                        .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                                 )
                         )
                 }
@@ -1823,10 +1837,10 @@ extension AIEnhancementSettingsView {
                             .scrollContentBackground(.hidden)
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(self.theme.palette.contentBackground.opacity(0.7))
+                                    .fill(self.theme.palette.contentBackground)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                                            .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                                     )
                             )
                         }
@@ -1844,10 +1858,10 @@ extension AIEnhancementSettingsView {
                             .scrollContentBackground(.hidden)
                             .background(
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(self.theme.palette.contentBackground.opacity(0.7))
+                                    .fill(self.theme.palette.contentBackground)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 1)
+                                            .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                                     )
                             )
                         }
@@ -1856,10 +1870,10 @@ extension AIEnhancementSettingsView {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(self.theme.palette.accent.opacity(0.06))
+                        .fill(self.theme.palette.accent.opacity(0.08))
                         .overlay(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                                .stroke(self.theme.palette.cardBorder, lineWidth: 1)
                         )
                 )
             } else if self.promptTest.isActive {
