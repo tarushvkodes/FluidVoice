@@ -369,6 +369,38 @@ final class TranscriptionHistoryStore: ObservableObject {
 // MARK: - Stats Computation Extension
 
 extension TranscriptionHistoryStore {
+    struct TodaySummary {
+        let words: Int
+        let transcriptions: Int
+
+        func timeSavedMinutes(typingWPM: Int = 40, speakingWPM: Int = 150) -> Double {
+            guard typingWPM > 0 && speakingWPM > 0 else { return 0 }
+
+            let words = Double(self.words)
+            let typingTime = words / Double(typingWPM)
+            let speakingTime = words / Double(speakingWPM)
+
+            return max(0, typingTime - speakingTime)
+        }
+
+        func formattedTimeSaved(typingWPM: Int = 40) -> String {
+            let minutes = self.timeSavedMinutes(typingWPM: typingWPM)
+
+            if minutes < 1 {
+                return "< 1m"
+            } else if minutes < 60 {
+                return "\(Int(minutes))m"
+            } else {
+                let hours = Int(minutes) / 60
+                let mins = Int(minutes) % 60
+                if mins == 0 {
+                    return "\(hours)h"
+                }
+                return "\(hours)h \(mins)m"
+            }
+        }
+    }
+
     // MARK: - Word Counting
 
     /// Count words in a string (handles multiple spaces, newlines)
@@ -386,13 +418,26 @@ extension TranscriptionHistoryStore {
         self.entries.reduce(0) { $0 + self.wordCount(in: $1.processedText) }
     }
 
-    /// Words transcribed today
-    var wordsToday: Int {
+    /// Summary for today's activity, calculated in one pass.
+    var todaySummary: TodaySummary {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        return self.entries
-            .filter { calendar.isDate($0.timestamp, inSameDayAs: today) }
-            .reduce(0) { $0 + self.wordCount(in: $1.processedText) }
+        let totals = self.entries.reduce(into: (words: 0, transcriptions: 0)) { result, entry in
+            guard calendar.isDate(entry.timestamp, inSameDayAs: today) else { return }
+            result.words += self.wordCount(in: entry.processedText)
+            result.transcriptions += 1
+        }
+        return TodaySummary(words: totals.words, transcriptions: totals.transcriptions)
+    }
+
+    /// Words transcribed today
+    var wordsToday: Int {
+        self.todaySummary.words
+    }
+
+    /// Number of transcriptions recorded today
+    var transcriptionsToday: Int {
+        self.todaySummary.transcriptions
     }
 
     /// Average words per transcription
@@ -433,6 +478,21 @@ extension TranscriptionHistoryStore {
             }
             return "\(hours)h \(mins)m"
         }
+    }
+
+    // MARK: - Today Time Saved
+
+    /// Calculate time saved today in minutes
+    /// - Parameters:
+    ///   - typingWPM: User's typing speed (default 40)
+    ///   - speakingWPM: Average speaking speed (default 150)
+    func timeSavedTodayMinutes(typingWPM: Int = 40, speakingWPM: Int = 150) -> Double {
+        self.todaySummary.timeSavedMinutes(typingWPM: typingWPM, speakingWPM: speakingWPM)
+    }
+
+    /// Formatted time saved today string (e.g., "2h 45m" or "45m")
+    func formattedTimeSavedToday(typingWPM: Int = 40) -> String {
+        self.todaySummary.formattedTimeSaved(typingWPM: typingWPM)
     }
 
     // MARK: - Streak Calculation

@@ -290,6 +290,8 @@ struct ContentView: View {
             .toolbar {
                 if !self.settings.shouldShowOnboarding {
                     ToolbarItemGroup(placement: .primaryAction) {
+                        self.todayStatsButton
+
                         self.themePreferenceButton
 
                         Button(action: self.openIssueReportingPage) {
@@ -1061,6 +1063,12 @@ struct ContentView: View {
         case .system: return .light
         case .light: return .dark
         case .dark: return .system
+        }
+    }
+
+    private var todayStatsButton: some View {
+        TodayStatsToolbarButton(typingWPM: self.settings.userTypingWPM) {
+            self.selectedSidebarItem = .stats
         }
     }
 
@@ -3927,6 +3935,36 @@ private extension ContentView {
         }
 
         self.refreshDevices()
+    }
+}
+
+private struct TodayStatsToolbarButton: View {
+    @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
+
+    let typingWPM: Int
+    let action: () -> Void
+
+    var body: some View {
+        let summary = self.historyStore.todaySummary
+        let timeSaved = summary.formattedTimeSaved(typingWPM: self.typingWPM)
+        let hasActivity = summary.words > 0
+
+        return Button(action: self.action) {
+            HStack(spacing: 4) {
+                Image(systemName: hasActivity ? "waveform" : "chart.bar.fill")
+                if hasActivity {
+                    Text("\(summary.words) words")
+                    Text("·")
+                        .foregroundStyle(.secondary)
+                    Text(timeSaved)
+                } else {
+                    Text("Today")
+                }
+            }
+            .font(.system(size: 12, weight: .medium))
+        }
+        .help(hasActivity ? "Today: \(summary.words) words · \(timeSaved) saved - view stats" : "View your stats")
+        .accessibilityLabel("Today stats")
     }
 }
 

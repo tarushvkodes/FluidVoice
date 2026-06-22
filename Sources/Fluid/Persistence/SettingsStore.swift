@@ -1384,26 +1384,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// No-op: never override the user's provider selection on launch.
+    ///
+    /// The per-prompt shortcut system means the global default provider is no longer the
+    /// authoritative routing source — each shortcut can bind to its own provider/model, or be off.
+    /// The only time we set a provider is during onboarding (Fluid Intelligence flow); after that
+    /// the selection is sticky across restarts and updates. Default is off (empty).
     func normalizeProviderSelectionForCurrentVerificationState() {
-        let currentProviderID = self.selectedProviderID
-        if self.isVerifiedProviderForCurrentConfiguration(currentProviderID) {
-            self.syncLinkedProviderSelections(to: currentProviderID)
-            return
-        }
-
-        let verifiedProviderIDs = self.verifiedProviderIDsForCurrentConfiguration()
-        guard verifiedProviderIDs.count == 1,
-              let providerID = verifiedProviderIDs.first
-        else {
-            if currentProviderID.isEmpty {
-                self.selectedProviderID = ""
-                self.syncLinkedProviderSelections(to: "")
-            }
-            return
-        }
-
-        self.selectedProviderID = providerID
-        self.syncLinkedProviderSelections(to: providerID)
+        // Intentionally empty. Selection is sticky.
     }
 
     var privateAIPrefixKVCacheEnabled: Bool {

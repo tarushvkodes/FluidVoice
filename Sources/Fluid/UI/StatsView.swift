@@ -20,6 +20,11 @@ struct StatsView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 16) {
+                self.todayHeaderCard
+
+                Divider()
+                    .opacity(0.4)
+
                 // Header row: Time Saved + Total Words
                 HStack(spacing: 16) {
                     self.timeSavedCard
@@ -49,6 +54,124 @@ struct StatsView: View {
             }
             .padding(20)
         }
+    }
+
+    // MARK: - Today Header
+
+    private var todayHeaderCard: some View {
+        let summary = self.historyStore.todaySummary
+        let wordsToday = summary.words
+        let timeSavedToday = summary.formattedTimeSaved(typingWPM: self.settings.userTypingWPM)
+        let sessionsToday = summary.transcriptions
+        let streak = self.historyStore.currentStreak
+
+        return ThemedCard(style: .prominent, padding: 20, hoverEffect: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                // Greeting + streak badge
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Today")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(.primary)
+
+                        Text(self.motivationalMessage(
+                            wordsToday: wordsToday,
+                            streak: streak
+                        ))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
+                    if streak > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "flame.fill")
+                                .font(.system(size: 11))
+                            Text("\(streak) day\(streak == 1 ? "" : "s")")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundStyle(self.theme.palette.warning)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule()
+                                .fill(self.theme.palette.warning.opacity(0.15))
+                        )
+                    }
+                }
+
+                // Today's metrics row
+                HStack(spacing: 24) {
+                    self.todayMetric(
+                        icon: "text.word.spacing",
+                        value: self.formatNumber(wordsToday),
+                        label: "words"
+                    )
+
+                    Divider()
+                        .frame(height: 32)
+
+                    self.todayMetric(
+                        icon: "clock.fill",
+                        value: timeSavedToday,
+                        label: "saved"
+                    )
+
+                    Divider()
+                        .frame(height: 32)
+
+                    self.todayMetric(
+                        icon: "waveform",
+                        value: "\(sessionsToday)",
+                        label: "sessions"
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func todayMetric(icon: String, value: String, label: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundStyle(self.theme.palette.accent)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Motivational message that scales with today's activity level.
+    private func motivationalMessage(wordsToday: Int, streak: Int) -> String {
+        if wordsToday == 0 {
+            return streak > 0 ? "Keep the streak alive — say a few words." : "Ready when you are. Start dictating to save time."
+        }
+
+        if wordsToday < 100 {
+            return "Warming up. Every word counts."
+        }
+
+        if wordsToday < 500 {
+            return "Solid pace — you're saving real time today."
+        }
+
+        if wordsToday < 1500 {
+            return streak > 2 ? "On fire. The streak is paying off." : "Strong day. Your hands thank you."
+        }
+
+        return "Outstanding. You've reclaimed serious time today."
     }
 
     // MARK: - Time Saved Card

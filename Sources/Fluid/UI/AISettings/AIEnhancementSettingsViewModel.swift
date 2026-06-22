@@ -1447,19 +1447,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.connectionStatus = statuses[self.selectedProviderID] ?? .unknown
     }
 
+    /// No-op: never auto-select a provider. The user's selection is sticky.
+    /// The per-prompt shortcut system means each shortcut binds independently, so forcing a
+    /// global default provider would silently override a user's deliberate "off" or alternate
+    /// choice. Only onboarding sets the initial provider.
     private func selectSoleVerifiedProviderIfNeeded() {
-        guard self.connectionStatusByProvider[self.selectedProviderID] != .success else { return }
-        let currentProviderIDs = ModelRepository.builtInProviderIDs + self.savedProviders.map(\.id)
-        let verifiedProviderIDs = currentProviderIDs.filter { providerID in
-            self.connectionStatusByProvider[providerID] == .success
-        }
-        guard verifiedProviderIDs.count == 1,
-              let providerID = verifiedProviderIDs.first
-        else {
-            return
-        }
-
-        self.selectProviderForUse(providerID)
+        // Intentionally empty. Selection is sticky.
     }
 
     func openReasoningConfig() {
@@ -1971,15 +1964,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.refreshPromptSelectionState()
     }
 
+    /// No-op: never auto-force the dictation prompt selection. The user's choice is sticky.
+    /// Each shortcut binds independently; forcing .privateAI when FI is selected would override
+    /// a user's deliberate "off" or "default" choice.
     private func syncPromptSelectionForSelectedProvider() {
-        guard self.isPrivateAIPromptAvailable(),
-              self.settings.dictationPromptSelection(for: .primary) != .privateAI
-        else {
-            return
-        }
-
-        self.settings.setDictationPromptSelection(.privateAI, for: .primary)
-        self.refreshPromptSelectionState()
+        // Intentionally empty. Selection is sticky.
     }
 
     func selectPrimaryDictationPromptOff() {
