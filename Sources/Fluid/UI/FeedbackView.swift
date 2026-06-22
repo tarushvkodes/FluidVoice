@@ -22,6 +22,8 @@ struct FeedbackView: View {
     @State private var showFeedbackError: Bool = false
     @State private var feedbackErrorMessage: String = ""
     @State private var appear: Bool = false
+    @State private var showSupportPopover: Bool = false
+    @State private var didCopySupportEmail: Bool = false
 
     var body: some View {
         ScrollView {
@@ -75,7 +77,7 @@ struct FeedbackView: View {
                                     .font(.system(size: 16, weight: .semibold))
                                     .foregroundStyle(self.theme.palette.primaryText)
 
-                                Text("Give us a star on GitHub! It helps others discover the project and motivates us to keep improving.")
+                                Text("Give us a star on GitHub, or support continued free development to help make local dictation even better.")
                                     .font(.system(size: 13))
                                     .foregroundStyle(self.theme.palette.secondaryText)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -83,28 +85,40 @@ struct FeedbackView: View {
 
                             Spacer()
 
-                            if let githubURL = URL(string: "https://github.com/altic-dev/Fluid-oss") {
-                                Link(destination: githubURL) {
+                            HStack(spacing: 10) {
+                                if let githubURL = URL(string: "https://github.com/altic-dev/Fluid-oss") {
+                                    Link(destination: githubURL) {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: "star.fill")
+                                            Text("Star on GitHub")
+                                                .fontWeight(.semibold)
+                                        }
+                                        .font(.system(size: 14))
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 10)
+                                    }
+                                    .fluidButton(.glass, size: .medium)
+                                    .buttonHoverEffect()
+                                }
+
+                                Button {
+                                    self.showSupportPopover = true
+                                } label: {
                                     HStack(spacing: 8) {
-                                        Image(systemName: "star.fill")
-                                        Text("Star on GitHub")
+                                        Image(systemName: "heart.fill")
+                                        Text("Support FluidVoice")
                                             .fontWeight(.semibold)
                                     }
                                     .font(.system(size: 14))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 16)
+                                    .padding(.horizontal, 20)
                                     .padding(.vertical, 10)
-                                    .background(
-                                        LinearGradient(
-                                            colors: [.purple, .blue],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
-                                    )
-                                    .cornerRadius(8)
                                 }
-                                .buttonStyle(.plain)
+                                .fluidButton(.glass, size: .medium)
                                 .buttonHoverEffect()
+                                .popover(isPresented: self.$showSupportPopover, arrowEdge: .bottom) {
+                                    self.supportPopover
+                                }
+                                .help("Show support email")
                             }
                         }
                     }
@@ -210,7 +224,55 @@ struct FeedbackView: View {
         }
     }
 
+    private var supportPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Help make local dictation even better.")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(self.theme.palette.primaryText)
+
+            Text("Please send us an email at alticdev@gmail.com if you'd like to support FluidVoice.")
+                .font(.system(size: 13))
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Text("alticdev@gmail.com")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    self.copySupportEmail()
+                } label: {
+                    Label(self.didCopySupportEmail ? "Copied" : "Copy Email", systemImage: self.didCopySupportEmail ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                }
+                .fluidButton(.glass, size: .small)
+                .buttonHoverEffect()
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
+    }
+
     // MARK: - Feedback Functions
+
+    private func copySupportEmail() {
+        let email = "alticdev@gmail.com"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(email, forType: .string)
+        self.didCopySupportEmail = true
+
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            self.didCopySupportEmail = false
+        }
+    }
 
     private func sendFeedback() async {
         guard !self.feedbackEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
