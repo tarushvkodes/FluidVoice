@@ -634,6 +634,63 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(HuggingFaceModelDownloader.cachedFileIsMarkup(at: missingURL))
     }
 
+    func testCachedPayloadContainsMarkup_detectsCorruptFileInPresentArtifactTree() throws {
+        // Guards the #353 provider-PREFLIGHT path: a corrupt HTML payload nested inside a
+        // present `.mlpackage` bundle (or a loose required file) must be detected so the preflight
+        // re-downloads instead of trusting a file-existence/manifest check, while a valid cached
+        // tree must not be flagged, and missing/empty required entries stay conservative.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FluidVoice-CachedPayloadTest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // A realistic `.mlpackage` layout: a JSON manifest plus a nested binary weight payload.
+        let packageName = "encoder.mlpackage"
+        let weightsDir = root.appendingPathComponent(packageName)
+            .appendingPathComponent("Data/com.apple.CoreML/weights", isDirectory: true)
+        try FileManager.default.createDirectory(at: weightsDir, withIntermediateDirectories: true)
+        let manifestURL = root.appendingPathComponent(packageName).appendingPathComponent("Manifest.json")
+        try Data("{\"fileFormatVersion\": \"1.0.0\"}".utf8).write(to: manifestURL)
+        let weightURL = weightsDir.appendingPathComponent("weight.bin")
+        try Data([0x00, 0x01, 0x02, 0x03, 0x04]).write(to: weightURL)
+
+        // A loose required file (e.g. a tokenizer) with real binary content.
+        let tokenizerURL = root.appendingPathComponent("tokenizer.model")
+        try Data([0x0A, 0x09, 0x05, 0x00]).write(to: tokenizerURL)
+
+        let entries = [packageName, "tokenizer.model"]
+
+        // An all-valid tree must not be flagged.
+        XCTAssertFalse(
+            HuggingFaceModelDownloader.cachedPayloadContainsMarkup(root: root, relativePaths: entries)
+        )
+
+        // A proxy HTML page persisted as a binary INSIDE the package must be detected.
+        try Data("<!DOCTYPE html><html><body>Blocked by proxy</body></html>".utf8).write(to: weightURL)
+        XCTAssertTrue(
+            HuggingFaceModelDownloader.cachedPayloadContainsMarkup(root: root, relativePaths: entries)
+        )
+
+        // Restore the binary; corrupt the loose required file instead — must still be detected.
+        try Data([0x00, 0x01, 0x02, 0x03, 0x04]).write(to: weightURL)
+        try Data("<html><head></head></html>".utf8).write(to: tokenizerURL)
+        XCTAssertTrue(
+            HuggingFaceModelDownloader.cachedPayloadContainsMarkup(root: root, relativePaths: entries)
+        )
+
+        // Missing entries and an empty required directory are conservative: never flagged corrupt
+        // on uncertainty (incompleteness is the existence check's concern, not this one's).
+        try Data([0x0A, 0x09, 0x05, 0x00]).write(to: tokenizerURL)
+        let emptyPackage = root.appendingPathComponent("empty.mlpackage", isDirectory: true)
+        try FileManager.default.createDirectory(at: emptyPackage, withIntermediateDirectories: true)
+        XCTAssertFalse(
+            HuggingFaceModelDownloader.cachedPayloadContainsMarkup(
+                root: root,
+                relativePaths: ["empty.mlpackage", "does-not-exist.json"]
+            )
+        )
+    }
+
     private static func modelDirectoryForRun() -> URL {
         // Use a stable path on CI so GitHub Actions cache can speed up runs.
         if ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true" ||

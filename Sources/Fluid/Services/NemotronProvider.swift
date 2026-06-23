@@ -88,13 +88,27 @@ final class NemotronProvider: TranscriptionProvider {
         }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        if self.modelsExistOnDisk() {
+        // A file-existence check alone would trust a corrupt cache: a network proxy can have
+        // returned an HTML block page (HTTP 200) in place of a model file, persisting markup as
+        // e.g. a `.mlpackage` binary or `tokenizer.model`. Re-sniff the present artifacts so such
+        // a payload forces a re-download (the downloader then deletes + re-fetches the bad files
+        // via `needsDownload`) instead of being loaded as a model forever. See #353.
+        let modelsPresent = self.modelsExistOnDisk()
+        let cachedArtifactsCorrupt = modelsPresent
+            && HuggingFaceModelDownloader.cachedPayloadContainsMarkup(root: dir, relativePaths: self.requiredFiles)
+        if modelsPresent && !cachedArtifactsCorrupt {
             DebugLogger.shared.info(
                 "Nemotron: artifacts present at \(dir.path); skipping download",
                 source: "Nemotron"
             )
             progressHandler?(0.8)
         } else {
+            if cachedArtifactsCorrupt {
+                DebugLogger.shared.warning(
+                    "Nemotron: cached artifacts at \(dir.path) contain an HTML/markup payload (corrupt); re-downloading",
+                    source: "Nemotron"
+                )
+            }
             DebugLogger.shared.info(
                 "Nemotron: artifacts missing; downloading from \(self.repositoryOwner)/\(self.repositoryName)",
                 source: "Nemotron"

@@ -300,6 +300,51 @@ final class HuggingFaceModelDownloader {
         return Self.looksLikeHTML(prefix)
     }
 
+    /// Returns `true` if any cached payload under `relativePaths` (each resolved against `root`)
+    /// is an HTML/markup document rather than real model data — the cached-*tree* analog of
+    /// `cachedFileIsMarkup`, intended for a provider preflight to call before trusting a present
+    /// cache and skipping the downloader. The downloader itself already re-validates each file via
+    /// `needsDownload`, but a preflight that returns on file-existence alone never reaches it, so a
+    /// corrupt-but-present cache would slip through (see #353).
+    ///
+    /// Each relative path may be a regular file or a directory (e.g. a `.mlpackage` bundle).
+    /// Directories are scanned recursively and every regular file inside is byte-sniffed with
+    /// `cachedFileIsMarkup`, reusing the single `looksLikeHTML` detector — there is no second
+    /// markup heuristic. Conservative on uncertainty, mirroring `cachedFileIsMarkup`: a path that
+    /// does not exist, a file that cannot be read, or a directory that cannot be enumerated is
+    /// skipped (treated as non-markup), so a valid cache is never reported corrupt. An empty
+    /// required directory therefore yields `false` here — its incompleteness is the existence
+    /// check's concern, not this markup check's.
+    static func cachedPayloadContainsMarkup(root: URL, relativePaths: [String]) -> Bool {
+        let fileManager = FileManager.default
+        for relativePath in relativePaths {
+            let url = root.appendingPathComponent(relativePath)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+                continue
+            }
+            if isDirectory.boolValue {
+                guard let enumerator = fileManager.enumerator(
+                    at: url,
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles]
+                ) else {
+                    continue
+                }
+                for case let fileURL as URL in enumerator {
+                    let isRegularFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile ?? false
+                    guard isRegularFile else { continue }
+                    if Self.cachedFileIsMarkup(at: fileURL) {
+                        return true
+                    }
+                }
+            } else if Self.cachedFileIsMarkup(at: url) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Returns `true` if `data` begins with an HTML / XML markup marker, ignoring a leading
     /// UTF-8 BOM and ASCII whitespace.
     ///
