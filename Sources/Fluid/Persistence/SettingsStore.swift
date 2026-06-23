@@ -15,6 +15,7 @@ final class SettingsStore: ObservableObject {
     static let transcriptionPreviewCharLimitRange: ClosedRange<Int> = 50...800
     static let transcriptionPreviewCharLimitStep = 50
     static let defaultTranscriptionPreviewCharLimit = 150
+    static let defaultVisualizerNoiseThreshold = 0.12
     static let privateAIContextTokenLimitRange: ClosedRange<Int> = 2048...8192
     static let privateAIContextTokenLimitStep = 512
     static let defaultPrivateAIContextTokenLimit = 4096
@@ -1759,7 +1760,7 @@ final class SettingsStore: ObservableObject {
     var visualizerNoiseThreshold: Double {
         get {
             let value = self.defaults.double(forKey: Keys.visualizerNoiseThreshold)
-            return value == 0.0 ? 0.4 : value // Default to 0.4 if not set
+            return value == 0.0 ? Self.defaultVisualizerNoiseThreshold : value
         }
         set {
             // Clamp between 0.0 and 0.95 to avoid division by zero issues in visualizers
