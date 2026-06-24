@@ -7,12 +7,22 @@ final class CodexHandoffService {
 
     private static let codexBundleID = "com.openai.codex"
     private static let pasteboardSessionSemaphore = DispatchSemaphore(value: 1)
+    private static let bundledCodexCLIPath = "/Applications/Codex.app/Contents/Resources/codex"
 
     private init() {}
 
     struct HandoffResult {
         let success: Bool
         let message: String
+    }
+
+    enum HandoffStyle: Equatable {
+        case notch
+        case app
+
+        init(rawValue: String) {
+            self = rawValue == "app" ? .app : .notch
+        }
     }
 
     private struct PasteboardItemSnapshot {
@@ -23,12 +33,21 @@ final class CodexHandoffService {
         let items: [PasteboardItemSnapshot]
     }
 
-    func sendToCodex(_ text: String) async -> HandoffResult {
+    func sendToCodex(_ text: String, style: HandoffStyle) async -> HandoffResult {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else {
             return HandoffResult(success: false, message: "No command text to send to Codex.")
         }
 
+        switch style {
+        case .notch:
+            return await self.runCodexInNotch(prompt)
+        case .app:
+            return await self.sendToCodexApp(prompt)
+        }
+    }
+
+    private func sendToCodexApp(_ prompt: String) async -> HandoffResult {
         guard await self.activateCodex() else {
             return HandoffResult(success: false, message: "Could not open Codex.")
         }
@@ -40,6 +59,87 @@ final class CodexHandoffService {
         }
 
         return HandoffResult(success: true, message: "Sent to Codex.")
+    }
+
+    private func runCodexInNotch(_ prompt: String) async -> HandoffResult {
+        guard FileManager.default.isExecutableFile(atPath: Self.bundledCodexCLIPath) else {
+            return HandoffResult(success: false, message: "Codex CLI was not found.")
+        }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluidvoice-codex-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: Self.bundledCodexCLIPath)
+        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        process.arguments = [
+            "-a", "never",
+            "exec",
+            "--skip-git-repo-check",
+            "--color", "never",
+            "-C", NSHomeDirectory(),
+            "-o", outputURL.path,
+            "-"
+        ]
+
+        let inputPipe = Pipe()
+        process.standardInput = inputPipe
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            DebugLogger.shared.error("Failed to start Codex CLI: \(error.localizedDescription)", source: "CodexHandoffService")
+            return HandoffResult(success: false, message: "Could not start Codex.")
+        }
+
+        if let data = prompt.data(using: .utf8) {
+            inputPipe.fileHandleForWriting.write(data)
+        }
+        inputPipe.fileHandleForWriting.closeFile()
+
+        let completed = await self.waitForProcess(process, timeout: 120)
+        guard completed else {
+            process.terminate()
+            return HandoffResult(success: false, message: "Codex took too long and was stopped.")
+        }
+
+        guard process.terminationStatus == 0 else {
+            return HandoffResult(success: false, message: "Codex finished with an error.")
+        }
+
+        let output = (try? String(contentsOf: outputURL, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !output.isEmpty else {
+            return HandoffResult(success: true, message: "Codex finished.")
+        }
+
+        return HandoffResult(success: true, message: output)
+    }
+
+    private func waitForProcess(_ process: Process, timeout: TimeInterval) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let lock = NSLock()
+            var didResume = false
+
+            func resume(_ value: Bool) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !didResume else { return }
+                didResume = true
+                continuation.resume(returning: value)
+            }
+
+            process.terminationHandler = { _ in
+                resume(true)
+            }
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                resume(false)
+            }
+        }
     }
 
     private func activateCodex() async -> Bool {

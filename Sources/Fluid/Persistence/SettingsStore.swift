@@ -2607,6 +2607,17 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var commandModeCodexHandoffStyle: String {
+        get {
+            let value = self.defaults.string(forKey: Keys.commandModeCodexHandoffStyle) ?? "notch"
+            return ["notch", "app"].contains(value) ? value : "notch"
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.commandModeCodexHandoffStyle)
+        }
+    }
+
     // MARK: - Rewrite Mode Settings
 
     var rewriteModeHotkeyShortcut: HotkeyShortcut {
@@ -4793,6 +4804,7 @@ private extension SettingsStore {
         static let commandModeLinkedToGlobal = "CommandModeLinkedToGlobal"
         static let commandModeShortcutEnabled = "CommandModeShortcutEnabled"
         static let commandModeRouteToCodex = "CommandModeRouteToCodex"
+        static let commandModeCodexHandoffStyle = "CommandModeCodexHandoffStyle"
 
         // Prompt Mode Keys (Transcribe with Prompt)
         static let promptModeHotkeyShortcut = "PromptModeHotkeyShortcut"

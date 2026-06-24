@@ -334,7 +334,9 @@ final class CommandModeService: ObservableObject {
         self.currentTurnCount = 0
         self.didRequireConfirmationThisRun = false
         self.pendingCommand = nil
-        self.currentStep = .executing("Sending to Codex")
+        let handoffStyle = CodexHandoffService.HandoffStyle(rawValue: SettingsStore.shared.commandModeCodexHandoffStyle)
+        let statusMessage = handoffStyle == .notch ? "Running Codex in notch..." : "Sending to Codex..."
+        self.currentStep = .executing(handoffStyle == .notch ? "Running Codex" : "Sending to Codex")
 
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         self.conversationHistory.append(Message(role: .user, content: cleanText))
@@ -342,11 +344,11 @@ final class CommandModeService: ObservableObject {
 
         if self.shouldSyncCommandNotchState {
             NotchContentState.shared.addCommandMessage(role: .user, content: cleanText)
-            NotchContentState.shared.addCommandMessage(role: .status, content: "Sending to Codex...")
+            NotchContentState.shared.addCommandMessage(role: .status, content: statusMessage)
             NotchContentState.shared.setCommandProcessing(true)
         }
 
-        let result = await CodexHandoffService.shared.sendToCodex(cleanText)
+        let result = await CodexHandoffService.shared.sendToCodex(cleanText, style: handoffStyle)
         self.conversationHistory.append(Message(
             role: .assistant,
             content: result.message,

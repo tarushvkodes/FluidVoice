@@ -168,6 +168,17 @@ struct CommandModeView: View {
             }
             .toggleStyle(.checkbox)
             .help("Send Command Mode input to Codex")
+
+            if self.settings.commandModeRouteToCodex {
+                Picker("Codex style", selection: self.$settings.commandModeCodexHandoffStyle) {
+                    Text("Notch").tag("notch")
+                    Text("App").tag("app")
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 112)
+                .help("Choose whether Codex runs in the notch or receives input in the app")
+            }
         }
         .padding()
         .background(self.theme.palette.windowBackground)
