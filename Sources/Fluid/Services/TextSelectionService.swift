@@ -165,7 +165,9 @@ final class TextSelectionService {
             return nil
         }
 
-        let deadline = Date().addingTimeInterval(0.35)
+        // Google Docs and other browser editors can update the system pasteboard
+        // noticeably later than native text fields after Cmd+C.
+        let deadline = Date().addingTimeInterval(1.0)
         var copiedText: String?
         repeat {
             if pasteboard.changeCount != clearedChangeCount,

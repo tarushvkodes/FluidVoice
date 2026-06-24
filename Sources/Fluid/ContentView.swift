@@ -2995,9 +2995,10 @@ struct ContentView: View {
             if typingTarget.shouldRestoreOriginalFocus {
                 await self.restoreFocusToRecordingTarget()
             }
-            self.asr.typeTextToActiveField(
-                self.rewriteModeService.rewrittenText,
-                preferredTargetPID: typingTarget.pid
+            self.rewriteModeService.acceptRewrite(
+                preferredTargetPID: typingTarget.pid,
+                hideApp: false,
+                recordAnalytics: false
             )
             AnalyticsService.shared.capture(
                 .outputDelivered,

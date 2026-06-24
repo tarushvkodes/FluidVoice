@@ -256,7 +256,11 @@ final class TypingService {
     /// Types/inserts text, optionally preferring a specific target PID for CGEvent posting.
     /// This helps when our overlay temporarily has focus; we can still target the original app.
     func typeTextInstantly(_ text: String, preferredTargetPID: pid_t?, textReadyAt: TimeInterval?) {
-        self.typeOutputPlanInstantly(.plain(text), preferredTargetPID: preferredTargetPID, textReadyAt: textReadyAt)
+        self.typeOutputPlanInstantly(
+            .plain(text),
+            preferredTargetPID: preferredTargetPID,
+            textReadyAt: textReadyAt
+        )
     }
 
     func typeOutputPlanInstantly(
@@ -264,18 +268,44 @@ final class TypingService {
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval?
     ) {
+        self.typeOutputPlanInstantly(
+            plan,
+            preferredTargetPID: preferredTargetPID,
+            textReadyAt: textReadyAt,
+            forceReliablePaste: false
+        )
+    }
+
+    /// Inserts text through the compatibility path regardless of the global typing mode.
+    /// This is useful for web editors that report success for key-event insertion but
+    /// only reliably replace rich editor selections through paste.
+    func typeTextReliably(_ text: String, preferredTargetPID: pid_t?, textReadyAt: TimeInterval? = nil) {
+        self.typeOutputPlanInstantly(
+            .plain(text),
+            preferredTargetPID: preferredTargetPID,
+            textReadyAt: textReadyAt,
+            forceReliablePaste: true
+        )
+    }
+
+    private func typeOutputPlanInstantly(
+        _ plan: DictationLiteralOutputPlan,
+        preferredTargetPID: pid_t?,
+        textReadyAt: TimeInterval?,
+        forceReliablePaste: Bool
+    ) {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let text = plan.plainText
         let mode = self.textInsertionMode
         let settleDelayMs: Int = {
-            if mode == .reliablePaste {
+            if forceReliablePaste || mode == .reliablePaste {
                 return preferredTargetPID == nil ? 80 : 0
             }
             return preferredTargetPID == nil ? 200 : 0
         }()
         let textReadyAge = textReadyAt.map { Self.elapsedMs(from: $0, to: requestedAt) }
         self.bench(
-            "request chars=\(text.count) mode=\(mode.rawValue) autocompleteSteps=\(plan.steps.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")"
+            "request chars=\(text.count) mode=\(mode.rawValue) forceReliablePaste=\(forceReliablePaste) autocompleteSteps=\(plan.steps.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")"
         )
         self.log("[TypingService] ENTRY: typeTextInstantly called with text length: \(text.count)")
         self.log("[TypingService] Text preview: \"\(String(text.prefix(100)))\"")
@@ -325,7 +355,7 @@ final class TypingService {
             self.log("[TypingService] Delay completed, calling insertTextInstantly")
             let insertStartedAt = ProcessInfo.processInfo.systemUptime
             self.bench("insert_call")
-            self.insertTextInstantly(text, preferredTargetPID: preferredTargetPID)
+            self.insertTextInstantly(text, preferredTargetPID: preferredTargetPID, forceReliablePaste: forceReliablePaste)
             self.bench(
                 "insert_return elapsedMs=\(Self.elapsedMs(since: insertStartedAt)) totalMs=\(Self.elapsedMs(since: requestedAt))"
             )
@@ -346,11 +376,11 @@ final class TypingService {
 
     // MARK: - Internal insertion pipeline
 
-    private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?) {
+    private func insertTextInstantly(_ text: String, preferredTargetPID: pid_t?, forceReliablePaste: Bool) {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
-        if self.textInsertionMode == .reliablePaste {
+        if forceReliablePaste || self.textInsertionMode == .reliablePaste {
             self.log("[TypingService] Reliable Paste mode enabled")
             if self.tryReliablePasteInsertion(text, preferredTargetPID: preferredTargetPID) {
                 self.log("[TypingService] SUCCESS: Reliable Paste mode completed")
