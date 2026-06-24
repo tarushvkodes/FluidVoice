@@ -50,6 +50,10 @@ extension SettingsStore {
     }
 
     var commandModeReadinessIssue: String? {
+        if self.commandModeRouteToCodex {
+            return nil
+        }
+
         let sourceProviderID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
         if sourceProviderID == "apple-intelligence" || sourceProviderID == "apple-intelligence-disabled" {
             return "Command Mode cannot use Apple Intelligence because terminal tools require a chat API. Choose a verified chat provider or turn Sync off."
