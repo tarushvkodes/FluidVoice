@@ -34,7 +34,13 @@ final class CommandModeService: ObservableObject {
     }
 
     private var shouldSyncCommandNotchState: Bool {
-        self.enableNotchOutput && NotchOverlayManager.shared.shouldSyncCommandConversationToNotch
+        (self.enableNotchOutput || self.shouldForceCodexNotchOutput) &&
+            NotchOverlayManager.shared.shouldSyncCommandConversationToNotch
+    }
+
+    private var shouldForceCodexNotchOutput: Bool {
+        SettingsStore.shared.commandModeRouteToCodex &&
+            SettingsStore.shared.commandModeCodexHandoffStyle == "notch"
     }
 
     private func loadCurrentChatFromStore() {
@@ -346,6 +352,9 @@ final class CommandModeService: ObservableObject {
             NotchContentState.shared.addCommandMessage(role: .user, content: cleanText)
             NotchContentState.shared.addCommandMessage(role: .status, content: statusMessage)
             NotchContentState.shared.setCommandProcessing(true)
+            if handoffStyle == .notch {
+                self.showExpandedNotchIfNeeded()
+            }
         }
 
         let result = await CodexHandoffService.shared.sendToCodex(cleanText, style: handoffStyle)
@@ -362,6 +371,9 @@ final class CommandModeService: ObservableObject {
         if self.shouldSyncCommandNotchState {
             NotchContentState.shared.addCommandMessage(role: result.success ? .assistant : .status, content: result.message)
             NotchContentState.shared.setCommandProcessing(false)
+            if handoffStyle == .notch {
+                self.showExpandedNotchIfNeeded()
+            }
         }
     }
 

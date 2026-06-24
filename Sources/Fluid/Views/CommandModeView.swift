@@ -45,7 +45,7 @@ struct CommandModeView: View {
         .onAppear {
             self.updateAvailableModels()
             // Disable notch output when using in-app UI (conversation is shared but notch shouldn't show)
-            self.service.enableNotchOutput = false
+            self.updateNotchOutputPreference()
         }
         .onDisappear {
             // Re-enable notch output when leaving in-app UI
@@ -64,6 +64,10 @@ struct CommandModeView: View {
         }
         .onChange(of: self.settings.commandModeRouteToCodex) { _, _ in
             self.updateAvailableModels()
+            self.updateNotchOutputPreference()
+        }
+        .onChange(of: self.settings.commandModeCodexHandoffStyle) { _, _ in
+            self.updateNotchOutputPreference()
         }
         .onChange(of: self.settings.selectedProviderID) { _, _ in
             self.updateAvailableModels()
@@ -657,6 +661,11 @@ struct CommandModeView: View {
         if !self.settings.commandModeLinkedToGlobal, !self.availableModels.contains(currentModel) {
             self.settings.commandModeSelectedModel = self.availableModels.first
         }
+    }
+
+    private func updateNotchOutputPreference() {
+        self.service.enableNotchOutput = self.settings.commandModeRouteToCodex &&
+            self.settings.commandModeCodexHandoffStyle == "notch"
     }
 
     private var builtInProvidersList: [(id: String, name: String)] {
