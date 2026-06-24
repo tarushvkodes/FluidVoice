@@ -307,6 +307,11 @@ final class CommandModeService: ObservableObject {
     func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false) async {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
+        if SettingsStore.shared.commandModeRouteToCodex {
+            await self.processCodexHandoff(text)
+            return
+        }
+
         self.isProcessing = true
         self.currentTurnCount = 0
         self.didRequireConfirmationThisRun = false
@@ -324,9 +329,48 @@ final class CommandModeService: ObservableObject {
         await self.processNextTurn(notifyInvalidRequest: notifyInvalidRequest)
     }
 
+    private func processCodexHandoff(_ text: String) async {
+        self.isProcessing = true
+        self.currentTurnCount = 0
+        self.didRequireConfirmationThisRun = false
+        self.pendingCommand = nil
+        self.currentStep = .executing("Sending to Codex")
+
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.conversationHistory.append(Message(role: .user, content: cleanText))
+        self.saveCurrentChat()
+
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.addCommandMessage(role: .user, content: cleanText)
+            NotchContentState.shared.addCommandMessage(role: .status, content: "Sending to Codex...")
+            NotchContentState.shared.setCommandProcessing(true)
+        }
+
+        let result = await CodexHandoffService.shared.sendToCodex(cleanText)
+        self.conversationHistory.append(Message(
+            role: .assistant,
+            content: result.message,
+            stepType: result.success ? .success : .failure
+        ))
+        self.isProcessing = false
+        self.currentStep = .completed(result.success)
+        self.saveCurrentChat()
+        self.captureCommandRunCompleted(success: result.success)
+
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.addCommandMessage(role: result.success ? .assistant : .status, content: result.message)
+            NotchContentState.shared.setCommandProcessing(false)
+        }
+    }
+
     /// Process follow-up command from notch input
     func processFollowUpCommand(_ text: String) async {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        if SettingsStore.shared.commandModeRouteToCodex {
+            await self.processCodexHandoff(text)
+            return
+        }
 
         // Add to both histories
         self.conversationHistory.append(Message(role: .user, content: text))

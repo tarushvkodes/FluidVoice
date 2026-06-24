@@ -2596,6 +2596,17 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var commandModeRouteToCodex: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.commandModeRouteToCodex)
+            return value as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.commandModeRouteToCodex)
+        }
+    }
+
     // MARK: - Rewrite Mode Settings
 
     var rewriteModeHotkeyShortcut: HotkeyShortcut {
@@ -4781,6 +4792,7 @@ private extension SettingsStore {
         static let pasteLastTranscriptionShortcutEnabled = "PasteLastTranscriptionShortcutEnabled"
         static let commandModeLinkedToGlobal = "CommandModeLinkedToGlobal"
         static let commandModeShortcutEnabled = "CommandModeShortcutEnabled"
+        static let commandModeRouteToCodex = "CommandModeRouteToCodex"
 
         // Prompt Mode Keys (Transcribe with Prompt)
         static let promptModeHotkeyShortcut = "PromptModeHotkeyShortcut"
