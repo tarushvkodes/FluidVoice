@@ -230,6 +230,14 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let isManagedDirectory = Self.isAppManagedArtifactsDirectory(directory, spec: spec)
 
+        // `validateArtifacts` proves the required entries exist and the manifest JSON decodes, but
+        // it does NOT byte-check the `.mlpackage` binaries — a network proxy can have returned an
+        // HTML block page (HTTP 200) in place of one, persisting markup as a model file. Re-sniff
+        // the present artifacts so such a payload forces the downloader to run (it then deletes +
+        // re-fetches the corrupt files via `needsDownload`) instead of being trusted forever. The
+        // outdated-bundle-stamp refresh below is preserved and takes precedence: a stamp-stale
+        // managed cache is still fully removed even if it is also markup-corrupt, so the bundle
+        // is wholly refreshed rather than only the corrupt files re-fetched. See #353.
         if spec.validateArtifacts(at: directory) {
             if isManagedDirectory, self.artifactBundleStampMatches(spec: spec, directory: directory) == false {
                 DebugLogger.shared.warning(
@@ -238,6 +246,11 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
                 )
                 try FileManager.default.removeItem(at: directory)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            } else if Self.cachedArtifactsAreMarkupCorrupt(spec: spec, directory: directory) {
+                DebugLogger.shared.warning(
+                    "ExternalCoreML: cached artifacts for \(directory.lastPathComponent) contain an HTML/markup payload (corrupt); re-downloading",
+                    source: "ExternalCoreML"
+                )
             } else {
                 DebugLogger.shared.info(
                     "ExternalCoreML: artifact validation passed for \(directory.lastPathComponent)",
@@ -248,7 +261,8 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             }
         }
 
-        if spec.validateArtifacts(at: directory) {
+        if spec.validateArtifacts(at: directory),
+           !Self.cachedArtifactsAreMarkupCorrupt(spec: spec, directory: directory) {
             DebugLogger.shared.info(
                 "ExternalCoreML: artifact validation passed for \(directory.lastPathComponent)",
                 source: "ExternalCoreML"
@@ -305,6 +319,19 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     ) -> Bool {
         guard let defaultCacheDirectory = spec.defaultCacheDirectory else { return false }
         return directory.standardizedFileURL.path == defaultCacheDirectory.standardizedFileURL.path
+    }
+
+    /// `true` if any required cached artifact is an HTML/markup payload instead of model data — a
+    /// corrupt cache a markup-blind `validateArtifacts` check would otherwise trust (#353). Reuses
+    /// the downloader's shared byte-sniff; conservative on read errors (never flags on uncertainty).
+    private static func cachedArtifactsAreMarkupCorrupt(
+        spec: ExternalCoreMLASRModelSpec,
+        directory: URL
+    ) -> Bool {
+        HuggingFaceModelDownloader.cachedPayloadContainsMarkup(
+            root: directory,
+            relativePaths: spec.requiredEntries
+        )
     }
 
     private static func makeError(_ description: String) -> NSError {
