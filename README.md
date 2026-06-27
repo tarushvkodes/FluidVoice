@@ -13,6 +13,12 @@ Open source voice-to-text dictation app for macOS with on-device AI enhancement.
 
 ---
 
+## Support FluidVoice
+
+If FluidVoice makes your day a little easier, you can support its continued development on [Ko-fi](https://ko-fi.com/alticdev).
+
+---
+
 ## What's New in 1.6.0
 
 - **Insanely fast Parakeet** — rebuilt Parakeet implementation with pretty much zero delay between speaking and seeing words on screen
