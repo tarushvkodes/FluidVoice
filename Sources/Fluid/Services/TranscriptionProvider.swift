@@ -1,5 +1,19 @@
 import Foundation
 
+/// Bridges provider callbacks into dependencies whose progress handlers are `@Sendable`.
+/// The callback is immutable; callers remain responsible for hopping to their UI actor.
+final class ModelPreparationProgressRelay: @unchecked Sendable {
+    private let handler: ((Double) -> Void)?
+
+    init(_ handler: ((Double) -> Void)?) {
+        self.handler = handler
+    }
+
+    func report(_ progress: Double) {
+        self.handler?(progress)
+    }
+}
+
 // MARK: - Transcription Result
 
 /// Unified result type for ASR transcription across all providers
@@ -58,12 +72,16 @@ protocol TranscriptionProvider {
 
     /// Clear cached models
     func clearCache() async throws
+
+    /// Whether cancellation should discard an incomplete app-managed model cache.
+    var shouldClearCacheAfterCancellation: Bool { get }
 }
 
 // Default implementation for optional methods
 extension TranscriptionProvider {
     func modelsExistOnDisk() -> Bool { return false }
     func clearCache() async throws {}
+    var shouldClearCacheAfterCancellation: Bool { true }
     var prefersNativeFileTranscription: Bool { false }
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         try await self.transcribe(samples)

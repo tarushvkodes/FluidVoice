@@ -38,7 +38,7 @@ final class NemotronProvider: TranscriptionProvider {
 
     private let repositoryOwner = "BarathwajAnandan"
     private let repositoryRevision = "main"
-    private let requiredFiles = [
+    static let requiredFiles = [
         "metadata.json",
         "preprocessor.mlpackage",
         "encoder.mlpackage",
@@ -76,12 +76,44 @@ final class NemotronProvider: TranscriptionProvider {
 
     func modelsExistOnDisk() -> Bool {
         guard let dir = self.cacheDirectory else { return false }
-        return self.requiredFiles.allSatisfy { entry in
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent(entry).path)
+        return Self.artifactsAreComplete(at: dir)
+    }
+
+    static func artifactsAreComplete(at directory: URL) -> Bool {
+        guard HuggingFaceModelDownloader.artifactsAreComplete(
+            root: directory,
+            items: self.requiredFiles.map {
+                .init(path: $0, isDirectory: $0.hasSuffix(".mlpackage"))
+            }
+        ) else {
+            return false
         }
+
+        let metadataURL = directory.appendingPathComponent("metadata.json")
+        guard
+            let metadataData = try? Data(contentsOf: metadataURL),
+            let metadataObject = try? JSONSerialization.jsonObject(with: metadataData),
+            let metadata = metadataObject as? [String: Any],
+            (metadata["sample_rate"] as? NSNumber)?.intValue == 16_000,
+            ((metadata["max_audio_samples"] as? NSNumber)?.intValue ?? 0) > 0,
+            (metadata["max_audio_seconds"] as? NSNumber).map({ $0.doubleValue > 0 }) ?? true
+        else {
+            return false
+        }
+
+        let tokenizerURL = directory.appendingPathComponent("tokenizer.model")
+        guard
+            let tokenizerAttributes = try? FileManager.default.attributesOfItem(atPath: tokenizerURL.path),
+            tokenizerAttributes[.type] as? FileAttributeType == .typeRegular,
+            ((tokenizerAttributes[.size] as? NSNumber)?.int64Value ?? 0) >= 100_000
+        else {
+            return false
+        }
+        return true
     }
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+        try Task.checkCancellation()
         guard self.isReady == false else { return }
         guard let dir = self.cacheDirectory else {
             throw Self.makeError("Unable to resolve a cache directory for \(self.name).")
@@ -95,13 +127,12 @@ final class NemotronProvider: TranscriptionProvider {
         // via `needsDownload`) instead of being loaded as a model forever. See #353.
         let modelsPresent = self.modelsExistOnDisk()
         let cachedArtifactsCorrupt = modelsPresent
-            && HuggingFaceModelDownloader.cachedPayloadContainsMarkup(root: dir, relativePaths: self.requiredFiles)
-        if modelsPresent && !cachedArtifactsCorrupt {
+            && HuggingFaceModelDownloader.cachedPayloadContainsMarkup(root: dir, relativePaths: Self.requiredFiles)
+        if modelsPresent, !cachedArtifactsCorrupt {
             DebugLogger.shared.info(
                 "Nemotron: artifacts present at \(dir.path); skipping download",
                 source: "Nemotron"
             )
-            progressHandler?(0.8)
         } else {
             if cachedArtifactsCorrupt {
                 DebugLogger.shared.warning(
@@ -117,16 +148,18 @@ final class NemotronProvider: TranscriptionProvider {
                 owner: self.repositoryOwner,
                 repo: self.repositoryName,
                 revision: self.repositoryRevision,
-                requiredItems: self.requiredFiles.map {
+                requiredItems: Self.requiredFiles.map {
                     .init(path: $0, isDirectory: $0.hasSuffix(".mlpackage"))
                 }
             )
             try await downloader.ensureModelsPresent(at: dir) { progress, _ in
-                progressHandler?(progress * 0.8)
+                progressHandler?(min(progress, 0.999))
             }
+            try Task.checkCancellation()
             guard self.modelsExistOnDisk() else {
                 throw Self.makeError("Nemotron artifacts incomplete after download at \(dir.path).")
             }
+            progressHandler?(1.0)
         }
 
         self.maxTranscriptionSamples = Self.loadMaxAudioSamples(from: dir) ?? self.maxTranscriptionSamples
@@ -144,9 +177,9 @@ final class NemotronProvider: TranscriptionProvider {
             manager = try await self.loadManager(modelDirectory: dir, computeUnits: .cpuAndGPU)
         }
         try await self.applySelectedLanguage(to: manager)
+        try Task.checkCancellation()
         self.manager = manager
         self.isReady = true
-        progressHandler?(1.0)
         DebugLogger.shared.info(
             "Nemotron: provider ready [mode=\(self.mode.displayName), lang=\(SettingsStore.shared.selectedNemotronLanguage.rawValue), maxSamples=\(self.maxTranscriptionSamples)]",
             source: "Nemotron"
@@ -294,7 +327,9 @@ final class NemotronProvider: TranscriptionProvider {
             await self.stopComponentProfilingIfNeeded(on: manager)
         }
         if let dir = self.cacheDirectory {
-            try? FileManager.default.removeItem(at: dir)
+            if FileManager.default.fileExists(atPath: dir.path) {
+                try FileManager.default.removeItem(at: dir)
+            }
         }
         self.manager = nil
         self.isReady = false

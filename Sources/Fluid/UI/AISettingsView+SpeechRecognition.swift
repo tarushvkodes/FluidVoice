@@ -308,7 +308,7 @@ extension VoiceEngineSettingsView {
     func speechModelCard(for model: SettingsStore.SpeechModel) -> some View {
         let isSelected = self.viewModel.previewSpeechModel == model
         let isConfiguredActive = self.viewModel.isActiveSpeechModel(model)
-        let isActive = isConfiguredActive && model.isInstalled
+        let isActive = isConfiguredActive && model.isInstalled && self.viewModel.asr.isAsrReady
 
         return HStack(alignment: .top, spacing: 10) {
             Circle()
@@ -361,65 +361,81 @@ extension VoiceEngineSettingsView {
             // Action area: Show progress if THIS model is being downloaded
             if self.viewModel.downloadingModel == model {
                 // This specific model is currently being downloaded
-                VStack(alignment: .trailing, spacing: 4) {
-                    if self.viewModel.downloadProgress >= 0.82 {
-                        HStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if self.viewModel.isCancellingModelDownload {
                             ProgressView()
                                 .controlSize(.mini)
-                            Text("Downloading…")
+                            Text("Cancelling…")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        } else {
+                            ProgressView(value: self.viewModel.downloadProgress)
+                                .progressViewStyle(.linear)
+                                .frame(width: 90)
+                            Text("\(Int(self.viewModel.downloadProgress * 100))%")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                         }
-                    } else {
-                        ProgressView(value: self.viewModel.downloadProgress)
-                            .progressViewStyle(.linear)
-                            .frame(width: 90)
-                        Text("\(Int(self.viewModel.downloadProgress * 100))%")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
                     }
+
+                    Button(self.viewModel.isCancellingModelDownload ? "Cancelling…" : "Cancel") {
+                        self.viewModel.cancelSpeechModelDownload()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.viewModel.isCancellingModelDownload)
                 }
-            } else if (self.viewModel.asr.isDownloadingModel || self.viewModel.asr.isLoadingModel) && isConfiguredActive && !self.viewModel.asr.isAsrReady {
+            } else if (self.viewModel.asr.isDownloadingModel
+                || self.viewModel.asr.isLoadingModel
+                || self.viewModel.asr.isCancellingModelPreparation)
+                && isConfiguredActive
+                && !self.viewModel.asr.isAsrReady
+            {
                 // Active model is loading/downloading (for Activate flow)
-                VStack(alignment: .trailing, spacing: 4) {
-                    if let progress = self.viewModel.asr.downloadProgress, self.viewModel.asr.isDownloadingModel {
-                        if progress >= 0.82 {
-                            HStack(spacing: 6) {
-                                ProgressView()
-                                    .controlSize(.mini)
-                                Text("Downloading…")
-                                    .font(self.theme.typography.bodySmall)
-                                    .foregroundStyle(self.voiceEngineSecondaryText)
-                            }
-                        } else {
+                HStack(spacing: 8) {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if self.viewModel.asr.isCancellingModelPreparation {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text("Cancelling…")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                        } else if let progress = self.viewModel.asr.downloadProgress, self.viewModel.asr.isDownloadingModel {
                             ProgressView(value: progress)
                                 .progressViewStyle(.linear)
                                 .frame(width: 90)
                             Text("\(Int(progress * 100))%")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
+                        } else {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text(self.viewModel.asr.isLoadingModel ? "Loading…" : "Downloading…")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
                         }
-                    } else {
-                        ProgressView()
-                            .controlSize(.mini)
-                        Text(self.viewModel.asr.isLoadingModel ? "Loading…" : "Downloading…")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
                     }
+
+                    Button(self.viewModel.asr.isCancellingModelPreparation ? "Cancelling…" : "Cancel") {
+                        self.viewModel.cancelActiveModelPreparation()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.viewModel.asr.isCancellingModelPreparation)
                 }
             } else if model.isInstalled {
                 HStack(spacing: 8) {
-                    if isConfiguredActive {
-                        let isLoading = (self.viewModel.asr.isLoadingModel || self.viewModel.asr.isDownloadingModel) && !self.viewModel.asr.isAsrReady
+                    if isActive {
                         self.speechModelLanguagePicker(for: model)
-                            .disabled(self.viewModel.asr.isRunning)
+                            .disabled(self.viewModel.areSpeechModelActionsBlocked)
 
-                        Text(isLoading ? "Loading…" : "Active")
+                        Text("Active")
                             .font(self.theme.typography.bodySmallStrong)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
-                            .background(Capsule().fill(isLoading ? .orange.opacity(0.25) : Color.fluidGreen.opacity(0.25)))
-                            .foregroundStyle(isLoading ? .orange : Color.fluidGreen)
+                            .background(Capsule().fill(Color.fluidGreen.opacity(0.25)))
+                            .foregroundStyle(Color.fluidGreen)
                     } else {
                         Button("Activate") {
                             self.viewModel.activateSpeechModel(model)
@@ -429,7 +445,7 @@ extension VoiceEngineSettingsView {
                         .tint(Color.fluidGreen)
                         .fontWeight(.semibold)
                         .shadow(color: Color.fluidGreen.opacity(0.35), radius: 4, x: 0, y: 1)
-                        .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
+                        .disabled(self.viewModel.areSpeechModelActionsBlocked)
                     }
 
                     if !model.usesAppleLogo {
@@ -442,7 +458,7 @@ extension VoiceEngineSettingsView {
                                     .foregroundStyle(.red.opacity(0.7))
                             }
                             .buttonStyle(.plain)
-                            .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
+                            .disabled(self.viewModel.areSpeechModelActionsBlocked)
                             .offset(x: isSelected ? 0 : 12)
                             .opacity(isSelected ? 1 : 0)
                         }
@@ -461,7 +477,7 @@ extension VoiceEngineSettingsView {
                                 }
                                 .buttonStyle(.plain)
                                 .foregroundStyle(self.voiceEngineTertiaryText)
-                                .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
+                                .disabled(self.viewModel.areSpeechModelActionsBlocked)
                             }
 
                             Button("Download") {
@@ -471,7 +487,7 @@ extension VoiceEngineSettingsView {
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                             .tint(.blue)
-                            .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
+                            .disabled(self.viewModel.areSpeechModelActionsBlocked)
                         }
                         .offset(x: isSelected ? 0 : 16)
                         .opacity(isSelected ? 1 : 0)
@@ -488,7 +504,7 @@ extension VoiceEngineSettingsView {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .tint(.blue)
-                        .disabled(self.viewModel.asr.isRunning || self.viewModel.downloadingModel != nil)
+                        .disabled(self.viewModel.areSpeechModelActionsBlocked)
                         .offset(x: isSelected ? 0 : 16)
                         .opacity(isSelected ? 1 : 0)
                     }

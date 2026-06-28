@@ -37,7 +37,7 @@ struct SettingsView: View {
     @Binding var primaryDictationShortcuts: [HotkeyShortcut]
     @Binding var activeShortcutRecordingTarget: ShortcutRecordingTarget?
     @Binding var shortcutRecordingMessage: String?
-    @Binding var commandModeShortcut: HotkeyShortcut
+    @Binding var commandModeShortcut: HotkeyShortcut?
     @Binding var rewriteShortcut: HotkeyShortcut
     @Binding var cancelRecordingShortcut: HotkeyShortcut
     @Binding var commandModeShortcutEnabled: Bool
@@ -703,10 +703,19 @@ struct SettingsView: View {
                                         isAnyRecordingActive: self.isRecordingAnyShortcut,
                                         recordingMessage: self.isRecording(.command) ? self.shortcutRecordingMessage : nil,
                                         isEnabled: self.$commandModeShortcutEnabled,
+                                        requiresShortcutToEnable: true,
                                         onChangePressed: {
                                             DebugLogger.shared.debug("Starting to record new command mode shortcut", source: "SettingsView")
                                             self.shortcutRecordingMessage = nil
                                             self.activeShortcutRecordingTarget = .command
+                                        },
+                                        onRemovePressed: {
+                                            if self.activeShortcutRecordingTarget == .command {
+                                                self.shortcutRecordingMessage = nil
+                                                self.activeShortcutRecordingTarget = nil
+                                            }
+                                            self.commandModeShortcut = nil
+                                            self.commandModeShortcutEnabled = false
                                         }
                                     )
                                     Divider().opacity(0.2).padding(.vertical, 4)
@@ -2201,14 +2210,18 @@ struct SettingsView: View {
     @ViewBuilder
     private func shortcutRow(
         content: ShortcutRowContent,
-        shortcut: HotkeyShortcut,
+        shortcut: HotkeyShortcut?,
         isRecording: Bool,
         isAnyRecordingActive: Bool,
         recordingMessage: String? = nil,
         isEnabled: Binding<Bool>? = nil,
-        onChangePressed: @escaping () -> Void
+        requiresShortcutToEnable: Bool = false,
+        onChangePressed: @escaping () -> Void,
+        onRemovePressed: (() -> Void)? = nil
     ) -> some View {
         let enabledValue = isEnabled?.wrappedValue ?? true
+        let hasShortcut = shortcut != nil
+        let enableToggleDisabled = isAnyRecordingActive || (requiresShortcutToEnable && !hasShortcut)
 
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
@@ -2233,7 +2246,7 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                         .tint(self.theme.palette.accent)
                         .labelsHidden()
-                        .disabled(isAnyRecordingActive)
+                        .disabled(enableToggleDisabled)
                 }
             }
 
@@ -2244,7 +2257,7 @@ struct SettingsView: View {
                 if isRecording && enabledValue {
                     self.shortcutCapturePill()
                 } else {
-                    self.shortcutDisplayPill(shortcut.displayString)
+                    self.shortcutDisplayPill(shortcut?.displayString ?? "Not set")
                 }
 
                 Button(isRecording ? "Cancel" : "Change") {
@@ -2257,7 +2270,16 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(!isRecording && (isAnyRecordingActive || !enabledValue))
+                .disabled(!isRecording && (isAnyRecordingActive || (!enabledValue && hasShortcut)))
+
+                if let onRemovePressed {
+                    Button("Remove") {
+                        onRemovePressed()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!hasShortcut || isAnyRecordingActive)
+                }
 
                 if isRecording, let recordingMessage, !recordingMessage.isEmpty {
                     Text(recordingMessage)

@@ -6,8 +6,18 @@ import SwiftUI
 final class VoiceEngineSettingsViewModel: ObservableObject {
     let settings: SettingsStore
     private let appServices: AppServices
+    private var cancellables = Set<AnyCancellable>()
 
     var asr: ASRService { self.appServices.asr }
+
+    var areSpeechModelActionsBlocked: Bool {
+        self.asr.isRunning
+            || self.downloadingModel != nil
+            || self.asr.hasActiveModelDownload
+            || self.asr.hasActiveModelPreparation
+            || self.asr.isCancellingModelPreparation
+            || (!self.asr.isAsrReady && (self.asr.isDownloadingModel || self.asr.isLoadingModel))
+    }
 
     @Published var modelSortOption: ModelSortOption = .provider
     @Published var providerFilter: SpeechProviderFilter = .all
@@ -21,10 +31,18 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var suppressSpeechProviderSync: Bool = false
     @Published var skipNextSpeechModelSync: Bool = false
 
-    /// The model currently being downloaded (nil if no download in progress)
-    @Published var downloadingModel: SettingsStore.SpeechModel?
-    /// Download progress for the current model (0.0 to 1.0)
-    @Published var downloadProgress: Double = 0.0
+    var downloadingModel: SettingsStore.SpeechModel? {
+        guard let modelID = self.asr.downloadingModelId else { return nil }
+        return SettingsStore.SpeechModel.allCases.first { $0.id == modelID }
+    }
+
+    var downloadProgress: Double {
+        self.asr.downloadProgress ?? 0.0
+    }
+
+    var isCancellingModelDownload: Bool {
+        self.asr.isCancellingModelDownload
+    }
 
     @Published var removeFillerWordsEnabled: Bool
 
@@ -34,6 +52,13 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         self.previewSpeechModel = settings.selectedSpeechModel
         self.selectedSpeechProvider = settings.selectedSpeechModel.provider
         self.removeFillerWordsEnabled = settings.removeFillerWordsEnabled
+        appServices.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.objectWillChange.send()
+                }
+            }
+            .store(in: &self.cancellables)
     }
 
     func onAppear() {
@@ -97,7 +122,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func activateSpeechModel(_ model: SettingsStore.SpeechModel) {
-        guard !self.asr.isRunning else { return }
+        guard !self.areSpeechModelActionsBlocked else { return }
         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
             self.settings.selectedSpeechModel = model
             self.previewSpeechModel = model
@@ -107,6 +132,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         Task {
             do {
                 try await self.asr.ensureAsrReady()
+            } catch is CancellationError {
+                DebugLogger.shared.info("Model activation cancelled: \(model.displayName)", source: "AISettingsView")
             } catch {
                 DebugLogger.shared.error("Failed to prepare model after activation: \(error)", source: "AISettingsView")
                 self.asr.errorTitle = "Model Activation Failed"
@@ -117,46 +144,34 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func downloadSpeechModel(_ model: SettingsStore.SpeechModel) {
-        guard !self.asr.isRunning else { return }
-        guard self.downloadingModel == nil else { return } // Prevent concurrent downloads
-        self.downloadingModel = model
-        self.downloadProgress = 0.0
-
-        Task {
-            // Mark this model as downloading
-            self.downloadingModel = model
-            self.downloadProgress = 0.0
-
+        guard !self.areSpeechModelActionsBlocked else { return }
+        Task { [weak self] in
+            guard let self else { return }
             do {
-                // Download the model WITHOUT changing the active selection
-                // Capture the model ID to guard against stale progress callbacks
-                let downloadingModelId = model.id
-                try await self.asr.downloadModel(model, progressHandler: { [weak self] progress in
-                    Task { @MainActor in
-                        // Only update progress if we're still downloading this specific model
-                        guard let self, self.downloadingModel?.id == downloadingModelId else { return }
-                        self.downloadProgress = max(self.downloadProgress, progress)
-                    }
-                })
-
+                try await self.asr.downloadModel(model, progressHandler: nil)
                 DebugLogger.shared.info("Model download completed: \(model.displayName)", source: "VoiceEngineVM")
+            } catch is CancellationError {
+                DebugLogger.shared.info("Model download cancelled: \(model.displayName)", source: "VoiceEngineVM")
             } catch {
                 DebugLogger.shared.error("Failed to download model \(model.displayName): \(error)", source: "VoiceEngineVM")
-                await MainActor.run {
-                    self.asr.errorTitle = "Model Download Failed"
-                    self.asr.errorMessage = error.localizedDescription
-                    self.asr.showError = true
-                }
+                self.asr.errorTitle = "Model Download Failed"
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
             }
-
-            // Clear downloading state
-            self.downloadingModel = nil
-            self.downloadProgress = 0.0
         }
     }
 
+    func cancelSpeechModelDownload() {
+        guard self.downloadingModel != nil, !self.isCancellingModelDownload else { return }
+        self.asr.cancelModelDownload()
+    }
+
+    func cancelActiveModelPreparation() {
+        self.asr.cancelModelPreparation()
+    }
+
     func deleteSpeechModel(_ model: SettingsStore.SpeechModel) {
-        guard !self.asr.isRunning else { return }
+        guard !self.areSpeechModelActionsBlocked else { return }
         let previousActive = self.settings.selectedSpeechModel
 
         Task {
@@ -219,6 +234,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     func downloadModels() async {
         do {
             try await self.asr.ensureAsrReady()
+        } catch is CancellationError {
+            DebugLogger.shared.info("Model download cancelled", source: "AISettingsView")
         } catch {
             DebugLogger.shared.error("Failed to download models: \(error)", source: "AISettingsView")
             self.asr.errorTitle = "Model Download Failed"

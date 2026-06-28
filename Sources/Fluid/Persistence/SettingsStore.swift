@@ -2353,7 +2353,7 @@ final class SettingsStore: ObservableObject {
     var commandModeShortcutEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.commandModeShortcutEnabled)
-            return value as? Bool ?? true
+            return value as? Bool ?? false
         }
         set {
             objectWillChange.send()
@@ -2361,18 +2361,21 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    var commandModeHotkeyShortcut: HotkeyShortcut {
+    var commandModeHotkeyShortcut: HotkeyShortcut? {
         get {
             if let data = defaults.data(forKey: Keys.commandModeHotkeyShortcut),
                let shortcut = try? JSONDecoder().decode(HotkeyShortcut.self, from: data)
             {
                 return shortcut
             }
-            // Default to Right Command key (keyCode: 54, no modifiers for the key itself)
-            return HotkeyShortcut(keyCode: 54, modifierFlags: [])
+            return nil
         }
         set {
             objectWillChange.send()
+            guard let newValue else {
+                self.defaults.removeObject(forKey: Keys.commandModeHotkeyShortcut)
+                return
+            }
             if let data = try? JSONEncoder().encode(newValue) {
                 self.defaults.set(data, forKey: Keys.commandModeHotkeyShortcut)
             }
@@ -3661,22 +3664,41 @@ final class SettingsStore: ObservableObject {
 
         var downloadSize: String {
             switch self {
-            case .parakeetTDT: return "~500 MB"
-            case .parakeetTDTv2: return "~500 MB"
-            case .parakeetRealtime: return "~250 MB"
-            case .qwen3Asr: return "~2.0 GB"
-            case .cohereTranscribeSixBit: return "~1.4 GB"
-            case .nemotronOffline: return "~530 MB"
-            case .nemotronStreaming: return "~670 MB"
-            case .nemotronStreaming320: return "~670 MB"
+            case .parakeetTDT: return "~460.9 MiB"
+            case .parakeetTDTv2: return "~442.9 MiB"
+            case .parakeetRealtime: return "~428.4 MiB"
+            case .qwen3Asr: return "~2.0 GiB"
+            case .cohereTranscribeSixBit: return "~1.54 GiB"
+            case .nemotronOffline: return "~530.8 MiB"
+            case .nemotronStreaming: return "~668.2 MiB"
+            case .nemotronStreaming320: return "~668.2 MiB"
             case .appleSpeech: return "Built-in"
             case .appleSpeechAnalyzer: return "Built-in"
-            case .whisperTiny: return "~75 MB"
-            case .whisperBase: return "~142 MB"
-            case .whisperSmall: return "~466 MB"
-            case .whisperMedium: return "~1.5 GB"
-            case .whisperLargeTurbo: return "~1.6 GB"
-            case .whisperLarge: return "~2.9 GB"
+            case .whisperTiny: return "~74.1 MiB"
+            case .whisperBase: return "~141.1 MiB"
+            case .whisperSmall: return "~465.0 MiB"
+            case .whisperMedium: return "~1.43 GiB"
+            case .whisperLargeTurbo: return "~1.51 GiB"
+            case .whisperLarge: return "~2.88 GiB"
+            }
+        }
+
+        var expectedDownloadBytes: Int64 {
+            switch self {
+            case .parakeetTDT: return 483_288_717
+            case .parakeetTDTv2: return 464_421_712
+            case .parakeetRealtime: return 449_190_189
+            case .qwen3Asr: return 2000 * 1024 * 1024
+            case .cohereTranscribeSixBit: return 1_650_748_785
+            case .nemotronOffline: return 556_552_620
+            case .nemotronStreaming, .nemotronStreaming320: return 700_685_415
+            case .whisperTiny: return 77_691_713
+            case .whisperBase: return 147_951_465
+            case .whisperSmall: return 487_601_967
+            case .whisperMedium: return 1_533_763_059
+            case .whisperLargeTurbo: return 1_624_555_275
+            case .whisperLarge: return 3_095_033_483
+            case .appleSpeech, .appleSpeechAnalyzer: return 0
             }
         }
 
@@ -4078,13 +4100,23 @@ final class SettingsStore: ObservableObject {
             case .appleSpeech, .appleSpeechAnalyzer:
                 return true
             case .parakeetTDT:
-                // Hardcoded path check for NVIDIA v3
-                return Self.parakeetCacheDirectory(version: "parakeet-tdt-0.6b-v3-coreml")
+                #if canImport(FluidAudio)
+                return Self.parakeetModelsExist(version: .v3)
+                #else
+                return false
+                #endif
             case .parakeetTDTv2:
-                // Hardcoded path check for NVIDIA v2
-                return Self.parakeetCacheDirectory(version: "parakeet-tdt-0.6b-v2-coreml")
+                #if canImport(FluidAudio)
+                return Self.parakeetModelsExist(version: .v2)
+                #else
+                return false
+                #endif
             case .parakeetRealtime:
-                return Self.parakeetCacheDirectory(version: "parakeet-eou-streaming/parakeet-eou-streaming/160ms")
+                #if canImport(FluidAudio)
+                return Self.parakeetRealtimeModelsExist()
+                #else
+                return false
+                #endif
             case .qwen3Asr:
                 #if canImport(FluidAudio) && ENABLE_QWEN
                 if #available(macOS 15.0, *) {
@@ -4101,7 +4133,7 @@ final class SettingsStore: ObservableObject {
                 else {
                     return false
                 }
-                return spec.validateArtifacts(at: directory)
+                return spec.validatesInstalledArtifacts(at: directory)
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 let hint: String
                 switch self {
@@ -4112,41 +4144,63 @@ final class SettingsStore: ObservableObject {
                 }
                 let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
                     .appendingPathComponent(hint, isDirectory: true)
-                let requiredEntries = [
-                    "metadata.json",
-                    "preprocessor.mlpackage",
-                    "encoder.mlpackage",
-                    "decoder.mlpackage",
-                    "joint.mlpackage",
-                    "joint_decision.mlpackage",
-                    "tokenizer.model",
-                ]
-                return directory.map { url in
-                    requiredEntries.allSatisfy {
-                        FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path)
-                    }
-                } ?? false
+                #if arch(arm64)
+                return directory.map { NemotronProvider.artifactsAreComplete(at: $0) } ?? false
+                #else
+                return false
+                #endif
             default:
                 // Whisper models
                 guard let whisperFile = self.whisperModelFile else { return false }
                 let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
                     .appendingPathComponent("WhisperModels")
                 let modelURL = directory?.appendingPathComponent(whisperFile)
-                return modelURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+                guard
+                    let modelURL,
+                    let attributes = try? FileManager.default.attributesOfItem(atPath: modelURL.path),
+                    let size = attributes[.size] as? NSNumber,
+                    size.int64Value > 0
+                else {
+                    return false
+                }
+                return size.int64Value == self.expectedDownloadBytes
             }
         }
 
-        private static func parakeetCacheDirectory(version: String) -> Bool {
-            #if canImport(FluidAudio)
-            let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
-            let modelDir = baseCacheDir.appendingPathComponent(version)
-            return FileManager.default.fileExists(atPath: modelDir.path)
-            #else
-            let baseCacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-                .appendingPathComponent(version)
-            return baseCacheDir.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-            #endif
+        #if canImport(FluidAudio)
+        private static func parakeetModelsExist(version: AsrModelVersion) -> Bool {
+            let directory = AsrModels.defaultCacheDirectory(for: version)
+            let vocabulary = directory.appendingPathComponent(ModelNames.ASR.vocabularyFile)
+            guard
+                AsrModels.modelsExist(at: directory, version: version),
+                HuggingFaceModelDownloader.artifactIsComplete(at: vocabulary, isDirectory: false)
+            else {
+                return false
+            }
+
+            return AsrModels.requiredModelNames.allSatisfy { modelName in
+                HuggingFaceModelDownloader.artifactIsComplete(
+                    at: directory.appendingPathComponent(modelName, isDirectory: true),
+                    isDirectory: true
+                )
+            }
         }
+
+        private static func parakeetRealtimeModelsExist() -> Bool {
+            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let modelDirectory = modelsDirectory
+                .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
+                .appendingPathComponent(Repo.parakeetEou160.folderName, isDirectory: true)
+
+            return ModelNames.ParakeetEOU.requiredModels.allSatisfy { modelName in
+                let artifact = modelDirectory.appendingPathComponent(modelName)
+                return HuggingFaceModelDownloader.artifactIsComplete(
+                    at: artifact,
+                    isDirectory: modelName.hasSuffix(".mlmodelc")
+                )
+            }
+        }
+        #endif
 
         /// Brand/provider name for the model (NVIDIA, Apple, OpenAI)
         var brandName: String {

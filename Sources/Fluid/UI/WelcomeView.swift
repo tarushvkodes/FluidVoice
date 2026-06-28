@@ -29,7 +29,7 @@ struct WelcomeView: View {
     let restartApp: () -> Void
 
     private var commandModeShortcutDisplay: String {
-        self.settings.commandModeHotkeyShortcut.displayString
+        self.settings.commandModeHotkeyShortcut?.displayString ?? "Not set"
     }
 
     private var writeModeShortcutDisplay: String {
@@ -605,6 +605,7 @@ struct OnboardingFlowView: View {
     @State private var isShowingOtherModelRoutes = false
     @State private var preparingModelRouteID: String?
     @State private var uninstallingModelRouteID: String?
+    @State private var modelPreparationTask: Task<Void, Never>?
     @State private var languageSearchText = ""
     @FocusState private var isLanguageSearchFocused: Bool
     @State private var hasPlayedLandingWelcomeSound = false
@@ -791,7 +792,11 @@ struct OnboardingFlowView: View {
         guard self.step == .voiceModel else {
             return false
         }
-        return self.preparingModelRouteID != nil || self.asr.isDownloadingModel || (self.asr.isLoadingModel && !self.asr.isAsrReady)
+        return self.preparingModelRouteID != nil
+            || self.asr.hasActiveModelPreparation
+            || self.asr.isCancellingModelPreparation
+            || self.asr.isDownloadingModel
+            || (self.asr.isLoadingModel && !self.asr.isAsrReady)
     }
 
     private var isMicrophoneReady: Bool {
@@ -887,7 +892,13 @@ struct OnboardingFlowView: View {
             }
         }
         .onChange(of: self.currentStep) { _, _ in
+            if self.step != .voiceModel {
+                self.cancelOnboardingModelPreparation()
+            }
             self.playLandingWelcomeSoundIfNeeded()
+        }
+        .onDisappear {
+            self.cancelOnboardingModelPreparation()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             self.syncOnboardingSelectionFromSettings()
@@ -1555,10 +1566,25 @@ struct OnboardingFlowView: View {
                             }
                             .frame(width: 608)
 
+                            if self.isModelPreparationInProgress {
+                                Label("First setup can take a few minutes. Too long? Cancel and retry.", systemImage: "clock.arrow.circlepath")
+                                    .font(self.theme.typography.captionStrong)
+                                    .foregroundStyle(Color.white.opacity(0.58))
+                                    .labelStyle(.titleAndIcon)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color.white.opacity(0.06))
+                                            .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1))
+                                    )
+                                    .padding(.top, 14)
+                            }
+
                             Text("You can switch models later in Voice Engine settings.")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(Color.white.opacity(0.44))
-                                .padding(.top, 18)
+                                .padding(.top, self.isModelPreparationInProgress ? 8 : 18)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 30)
@@ -1891,16 +1917,20 @@ struct OnboardingFlowView: View {
     private func prepareOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
         guard !self.asr.isRunning, !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
 
+        self.modelPreparationTask?.cancel()
         self.preparingModelRouteID = route.id
         self.selectOnboardingRoute(route)
 
-        Task { @MainActor in
+        self.modelPreparationTask = Task { @MainActor in
             defer {
                 self.preparingModelRouteID = nil
+                self.modelPreparationTask = nil
             }
 
             do {
                 try await self.asr.ensureAsrReady()
+            } catch is CancellationError {
+                DebugLogger.shared.info("Cancelled onboarding voice model setup for \(route.model.displayName)", source: "OnboardingFlowView")
             } catch {
                 DebugLogger.shared.error("Failed to prepare onboarding voice model \(route.model.displayName): \(error)", source: "OnboardingFlowView")
                 // Surface the failure in the UI instead of only logging it, so the user
@@ -1910,8 +1940,14 @@ struct OnboardingFlowView: View {
                 self.asr.errorMessage = error.localizedDescription
                 self.asr.showError = true
             }
+            guard !Task.isCancelled else { return }
             await self.asr.checkIfModelsExistAsync()
         }
+    }
+
+    private func cancelOnboardingModelPreparation() {
+        self.modelPreparationTask?.cancel()
+        self.asr.cancelModelPreparation()
     }
 
     private func uninstallOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
@@ -2005,35 +2041,19 @@ struct OnboardingFlowView: View {
             }
 
             if isPreparing || isUninstalling {
-                VStack(alignment: .leading, spacing: 7) {
-                    if self.asr.isDownloadingModel, let progress = self.asr.downloadProgress {
-                        ProgressView(value: progress)
-                            .tint(FluidOnboardingLandingColors.blue)
+                HStack(spacing: 8) {
+                    self.onboardingModelPreparationStatus(isUninstalling: isUninstalling)
 
-                        HStack(spacing: 6) {
-                            ZStack {
-                                if progress >= 0.82 {
-                                    ProgressView()
-                                        .controlSize(.mini)
-                                        .fixedSize()
-                                }
-                            }
-                            .frame(width: 14, height: 14)
-                            .opacity(progress >= 0.82 ? 1 : 0)
-
-                            Text("Downloading \(Int(progress * 100))%")
-                                .font(self.theme.typography.captionStrong)
-                                .foregroundStyle(Color.white.opacity(0.56))
-                        }
-                    } else {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                                .fixedSize()
-
-                            Text(isUninstalling ? "Deleting..." : "Loading model...")
-                                .font(self.theme.typography.captionStrong)
-                                .foregroundStyle(Color.white.opacity(0.62))
+                    if isPreparing {
+                        self.onboardingModelActionButton(
+                            id: "\(route.id)-cancel",
+                            title: self.asr.isCancellingModelPreparation ? "Cancelling…" : "Cancel",
+                            systemImage: "xmark",
+                            tone: .secondary,
+                            width: 104,
+                            isDisabled: self.asr.isCancellingModelPreparation
+                        ) {
+                            self.cancelOnboardingModelPreparation()
                         }
                     }
                 }
@@ -2133,6 +2153,50 @@ struct OnboardingFlowView: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Speed \(Int(model.speedPercent * 100)) percent. Accuracy \(Int(model.accuracyPercent * 100)) percent.")
+    }
+
+    private func onboardingModelPreparationStatus(isUninstalling: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if self.asr.isCancellingModelPreparation {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .fixedSize()
+
+                    Text("Cancelling...")
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(Color.white.opacity(0.62))
+                }
+            } else if self.asr.isDownloadingModel, let progress = self.asr.downloadProgress {
+                ProgressView(value: progress)
+                    .tint(FluidOnboardingLandingColors.blue)
+
+                HStack(spacing: 6) {
+                    Text("Downloading \(Int(progress * 100))%")
+                        .font(self.theme.typography.captionStrong)
+                        .foregroundStyle(Color.white.opacity(0.56))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .fixedSize()
+
+                    Text(
+                        isUninstalling
+                            ? "Deleting..."
+                            : "Loading model..."
+                    )
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(Color.white.opacity(0.62))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func onboardingModelMetadataRow(badgeText: String?) -> some View {

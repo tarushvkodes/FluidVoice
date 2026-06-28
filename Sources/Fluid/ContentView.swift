@@ -179,7 +179,7 @@ struct ContentView: View {
     @State private var accessibilityEnabled = false
     @State private var primaryDictationShortcuts: [HotkeyShortcut] = SettingsStore.shared.primaryDictationShortcuts
     @State private var promptModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.promptModeHotkeyShortcut
-    @State private var commandModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.commandModeHotkeyShortcut
+    @State private var commandModeHotkeyShortcut: HotkeyShortcut? = SettingsStore.shared.commandModeHotkeyShortcut
     @State private var rewriteModeHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.rewriteModeHotkeyShortcut
     @State private var cancelRecordingHotkeyShortcut: HotkeyShortcut = SettingsStore.shared.cancelRecordingHotkeyShortcut
     @State private var isPromptModeShortcutEnabled: Bool = SettingsStore.shared.promptModeShortcutEnabled
@@ -442,6 +442,10 @@ struct ContentView: View {
             }
             .onChange(of: self.activeShortcutRecordingTarget) { _, _ in
                 self.hotkeyManager?.resetModifierOnlyShortcutTracking()
+            }
+            .onChange(of: self.commandModeHotkeyShortcut) { _, newValue in
+                SettingsStore.shared.commandModeHotkeyShortcut = newValue
+                self.hotkeyManager?.updateCommandModeShortcut(newValue)
             }
             .onChange(of: self.isPromptModeShortcutEnabled) { newValue in
                 self.handlePromptShortcutEnabledChange(newValue)
@@ -990,12 +994,23 @@ struct ContentView: View {
 
         let configuredShortcuts: [(ShortcutRecordingTarget, HotkeyShortcut)] = [
             (.secondaryDictation, self.promptModeHotkeyShortcut),
-            (.command, self.commandModeHotkeyShortcut),
             (.edit, self.rewriteModeHotkeyShortcut),
             (.cancel, self.cancelRecordingHotkeyShortcut),
         ]
+        let optionalConfiguredShortcuts: [(ShortcutRecordingTarget, HotkeyShortcut?)] = [
+            (.command, self.commandModeHotkeyShortcut),
+        ]
 
         for (otherTarget, configuredShortcut) in configuredShortcuts where otherTarget != target {
+            if configuredShortcut == shortcut {
+                return "Duplicate with \(otherTarget.title)"
+            }
+            if shortcut.conflictsWith(configuredShortcut) {
+                return "Overlaps \(otherTarget.title) — use a different modifier key"
+            }
+        }
+        for (otherTarget, configuredShortcut) in optionalConfiguredShortcuts where otherTarget != target {
+            guard let configuredShortcut else { continue }
             if configuredShortcut == shortcut {
                 return "Duplicate with \(otherTarget.title)"
             }

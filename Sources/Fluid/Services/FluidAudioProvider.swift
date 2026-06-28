@@ -2,18 +2,6 @@ import Foundation
 #if arch(arm64)
 import FluidAudio
 
-private actor DownloadProgressSink {
-    private let handler: ((Double) -> Void)?
-
-    init(handler: ((Double) -> Void)?) {
-        self.handler = handler
-    }
-
-    func emit(_ progress: Double) {
-        self.handler?(progress)
-    }
-}
-
 /// TranscriptionProvider implementation using FluidAudio (optimized for Apple Silicon)
 /// This wraps the existing FluidAudio-based ASR for use on Apple Silicon Macs.
 final class FluidAudioProvider: TranscriptionProvider {
@@ -48,60 +36,70 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+        try Task.checkCancellation()
         guard self.isReady == false else { return }
 
         let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-        let modelVersion: String = selectedModel == .parakeetTDTv2 ? "v2" : "v3"
+        let asrModelVersion: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
+        let modelVersion = selectedModel == .parakeetTDTv2 ? "v2" : "v3"
         let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let modelCacheDirectory = AsrModels.defaultCacheDirectory(for: asrModelVersion)
         DebugLogger.shared.info(
             "FluidAudioProvider: Starting model preparation for \(selectedModel.displayName) [version=\(modelVersion)]",
             source: "FluidAudioProvider"
         )
         DebugLogger.shared.debug("FluidAudioProvider: target cache directory=\(cacheDirectory.path)", source: "FluidAudioProvider")
-        let progressSink = DownloadProgressSink(handler: progressHandler)
-        await progressSink.emit(0.05)
-
-        // AsrModels.downloadAndLoad() is a single await without granular callbacks.
-        // Emit synthetic incremental progress so the UI updates smoothly during long downloads.
-        let progressTicker = Task(priority: .utility) {
-            var stagedProgress = 0.05
-            let stageCap = 0.82
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                if Task.isCancelled { break }
-                if stagedProgress >= stageCap { continue }
-
-                let remaining = stageCap - stagedProgress
-                let step = max(0.008, remaining * 0.12)
-                stagedProgress = min(stageCap, stagedProgress + step)
-                await progressSink.emit(stagedProgress)
+        try Task.checkCancellation()
+        if FileManager.default.fileExists(atPath: modelCacheDirectory.path), !self.modelsExistOnDisk() {
+            DebugLogger.shared.warning(
+                "FluidAudioProvider: removing incomplete \(modelVersion) cache before download",
+                source: "FluidAudioProvider"
+            )
+            try FileManager.default.removeItem(at: modelCacheDirectory)
+        }
+        let progressRelay = ModelPreparationProgressRelay(progressHandler)
+        progressRelay.report(0.0)
+        let fluidAudioProgressHandler: DownloadUtils.ProgressHandler = { progress in
+            switch progress.phase {
+            case .listing:
+                progressRelay.report(0.0)
+            case .downloading:
+                progressRelay.report(max(0.0, min(1.0, progress.fractionCompleted * 2.0)))
+            case .compiling:
+                progressRelay.report(1.0)
             }
         }
-        defer { progressTicker.cancel() }
 
         let loadStart = Date()
         // Download and load models
         let models: AsrModels
-        if selectedModel == .parakeetTDTv2 {
-            // Explicitly load v2 (English Only)
-            models = try await AsrModels.downloadAndLoad(version: .v2)
-        } else {
-            // Default to v3 (Multilingual)
-            models = try await AsrModels.downloadAndLoad(version: .v3)
+        do {
+            models = try await AsrModels.downloadAndLoad(
+                version: asrModelVersion,
+                progressHandler: fluidAudioProgressHandler
+            )
+        } catch {
+            let nsError = error as NSError
+            if Task.isCancelled
+                || error is CancellationError
+                || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
+            {
+                throw CancellationError()
+            }
+            throw error
         }
-        progressTicker.cancel()
+        try Task.checkCancellation()
         DebugLogger.shared.debug(
             "FluidAudioProvider: Models downloadAndLoad returned in \(String(format: "%.2f", Date().timeIntervalSince(loadStart)))s",
             source: "FluidAudioProvider"
         )
-        await progressSink.emit(0.88)
 
         // Streaming manager: lightweight, no vocab boosting → avoids CTC/ANE contention
         // that causes intermittent SIGTRAP crashes during streaming inference.
         let streamingManager = AsrManager(config: ASRConfig.default)
         try await streamingManager.initialize(models: models)
+        try Task.checkCancellation()
         DebugLogger.shared.debug("FluidAudioProvider: Streaming AsrManager initialized", source: "FluidAudioProvider")
-        await progressSink.emit(0.94)
 
         self.isWordBoostingActive = false
         self.boostedVocabularyTermsCount = 0
@@ -137,6 +135,9 @@ final class FluidAudioProvider: TranscriptionProvider {
                     finalManager = streamingManager
                 }
             } catch {
+                if Task.isCancelled || error is CancellationError {
+                    throw CancellationError()
+                }
                 DebugLogger.shared.warning("FluidAudioProvider: Failed to configure vocabulary boosting: \(error)", source: "FluidAudioProvider")
                 finalManager = streamingManager
             }
@@ -150,10 +151,10 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.latestStreamingPreviewText = ""
         self.latestStreamingPreviewSampleCount = 0
         self.latestStreamingPreviewFinishedAt = nil
-        await progressSink.emit(0.98)
 
+        try Task.checkCancellation()
         self.isReady = true
-        await progressSink.emit(1.0)
+        progressRelay.report(1.0)
         DebugLogger.shared.info(
             "FluidAudioProvider: Models ready [isWordBoostingActive=\(self.isWordBoostingActive), terms=\(self.boostedVocabularyTermsCount)]",
             source: "FluidAudioProvider"
@@ -354,15 +355,12 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func modelsExistOnDisk() -> Bool {
-        let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
         let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-
-        if selectedModel == .parakeetTDTv2 {
-            let v2CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v2-coreml")
-            return FileManager.default.fileExists(atPath: v2CacheDir.path)
-        } else {
-            let v3CacheDir = baseCacheDir.appendingPathComponent("parakeet-tdt-0.6b-v3-coreml")
-            return FileManager.default.fileExists(atPath: v3CacheDir.path)
+        switch selectedModel {
+        case .parakeetTDT, .parakeetTDTv2:
+            return selectedModel.isInstalled
+        default:
+            return false
         }
     }
 

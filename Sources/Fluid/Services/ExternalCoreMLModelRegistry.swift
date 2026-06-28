@@ -58,6 +58,8 @@ enum ExternalCoreMLArtifactsValidationError: LocalizedError {
 }
 
 struct ExternalCoreMLASRModelSpec {
+    private static let bundleStampFileName = ".fluid_artifact_bundle_version"
+
     let backend: ExternalCoreMLASRBackend
     let artifactFolderHint: String
     let manifestFileName: String
@@ -101,10 +103,40 @@ struct ExternalCoreMLASRModelSpec {
         (try? self.validateArtifactsOrThrow(at: directory)) != nil
     }
 
+    func validatesInstalledArtifacts(at directory: URL) -> Bool {
+        guard self.validateArtifacts(at: directory) else { return false }
+        return !self.isAppManagedArtifactsDirectory(directory)
+            || self.artifactBundleStampMatches(at: directory)
+    }
+
+    func isAppManagedArtifactsDirectory(_ directory: URL) -> Bool {
+        guard let defaultCacheDirectory = self.defaultCacheDirectory else { return false }
+        return directory.standardizedFileURL.path == defaultCacheDirectory.standardizedFileURL.path
+    }
+
+    func artifactBundleStampMatches(at directory: URL) -> Bool {
+        let stampURL = directory.appendingPathComponent(Self.bundleStampFileName, isDirectory: false)
+        guard
+            let currentStamp = try? String(contentsOf: stampURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
+            return false
+        }
+        return currentStamp == self.artifactBundleVersion
+    }
+
+    func persistArtifactBundleStamp(at directory: URL) {
+        let stampURL = directory.appendingPathComponent(Self.bundleStampFileName, isDirectory: false)
+        try? self.artifactBundleVersion.write(to: stampURL, atomically: true, encoding: .utf8)
+    }
+
     func missingEntries(at directory: URL) -> [String] {
         self.requiredEntries.filter { entry in
             let url = self.url(for: entry, in: directory)
-            return FileManager.default.fileExists(atPath: url.path) == false
+            return HuggingFaceModelDownloader.artifactIsComplete(
+                at: url,
+                isDirectory: entry.hasSuffix(".mlpackage")
+            ) == false
         }
     }
 

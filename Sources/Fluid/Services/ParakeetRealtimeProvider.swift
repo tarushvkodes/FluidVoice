@@ -21,6 +21,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
     }
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+        try Task.checkCancellation()
         guard self.isReady == false else { return }
 
         let modelDirectory = self.modelDirectory()
@@ -49,12 +50,32 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
         configuration.computeUnits = .cpuAndNeuralEngine
         configuration.allowLowPrecisionAccumulationOnGPU = true
 
+        try Task.checkCancellation()
+        if !missingBefore.isEmpty, FileManager.default.fileExists(atPath: modelDirectory.path) {
+            DebugLogger.shared.warning(
+                "ParakeetRealtimeProvider.prepare: removing incomplete Flash cache before download",
+                source: "ParakeetRealtimeProvider"
+            )
+            try FileManager.default.removeItem(at: modelDirectory)
+        }
+
         let engine = StreamingEouAsrManager(configuration: configuration, chunkSize: self.chunkSize)
+        let progressRelay = ModelPreparationProgressRelay(progressHandler)
         do {
             try await engine.loadModelsFromHuggingFace(progressHandler: { progress in
-                progressHandler?(max(0.0, min(1.0, progress.fractionCompleted)))
+                switch progress.phase {
+                case .listing:
+                    progressRelay.report(0.0)
+                case .downloading:
+                    progressRelay.report(max(0.0, min(1.0, progress.fractionCompleted * 2.0)))
+                case .compiling:
+                    progressRelay.report(1.0)
+                }
             })
         } catch {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
             let missingAfterFailure = self.missingRequiredModelFiles()
             DebugLogger.shared.error(
                 "ParakeetRealtimeProvider.prepare: Flash load failed. modelDir=\(modelDirectory.path), missingAfterFailure=\(missingAfterFailure.joined(separator: ", "))",
@@ -66,6 +87,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
             )
             throw error
         }
+        try Task.checkCancellation()
 
         let missingAfter = self.missingRequiredModelFiles()
         guard missingAfter.isEmpty else {
@@ -201,7 +223,11 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
         return ModelNames.ParakeetEOU.requiredModels
             .sorted()
             .filter { fileName in
-                !FileManager.default.fileExists(atPath: modelDirectory.appendingPathComponent(fileName).path)
+                let artifact = modelDirectory.appendingPathComponent(fileName)
+                return !HuggingFaceModelDownloader.artifactIsComplete(
+                    at: artifact,
+                    isDirectory: fileName.hasSuffix(".mlmodelc")
+                )
             }
     }
 

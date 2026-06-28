@@ -59,25 +59,6 @@ final class WhisperProvider: TranscriptionProvider {
         self.modelURL.deletingLastPathComponent()
     }
 
-    private func expectedMinimumModelBytes(for fileName: String) -> Int64? {
-        switch fileName {
-        case "ggml-tiny.bin":
-            return 50 * 1024 * 1024
-        case "ggml-base.bin":
-            return 100 * 1024 * 1024
-        case "ggml-small.bin":
-            return 300 * 1024 * 1024
-        case "ggml-medium.bin":
-            return 1000 * 1024 * 1024
-        // case "ggml-large-v3-turbo.bin": // buggy - so removed temporarily
-        //     return 1200 * 1024 * 1024
-        case "ggml-large-v3.bin":
-            return 2000 * 1024 * 1024
-        default:
-            return nil
-        }
-    }
-
     private func isModelFileValid(at url: URL) -> Bool {
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
@@ -87,15 +68,14 @@ final class WhisperProvider: TranscriptionProvider {
         }
         let sizeBytes = size.int64Value
         guard sizeBytes > 0 else { return false }
-        if let minBytes = self.expectedMinimumModelBytes(for: url.lastPathComponent),
-           sizeBytes < minBytes
-        {
-            return false
-        }
-        return true
+        let expectedBytes = SettingsStore.SpeechModel.allCases
+            .first { $0.whisperModelFile == url.lastPathComponent }?
+            .expectedDownloadBytes
+        return expectedBytes.map { sizeBytes == $0 } ?? false
     }
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+        try Task.checkCancellation()
         // CRITICAL: Capture the target model at start to use consistently throughout this method.
         // This prevents race conditions where SettingsStore could change after await points.
         let targetModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
@@ -172,6 +152,7 @@ final class WhisperProvider: TranscriptionProvider {
         DebugLogger.shared.info("WhisperProvider: Loading Whisper model...", source: "WhisperProvider")
         self.whisper = Whisper(fromFileURL: self.modelURL)
 
+        try Task.checkCancellation()
         self.loadedModelName = currentModelName
         self.isReady = true
         DebugLogger.shared.info("WhisperProvider: Model ready (\(currentModelName))", source: "WhisperProvider")
@@ -284,6 +265,11 @@ final class WhisperProvider: TranscriptionProvider {
                 DebugLogger.shared.info("WhisperProvider: Model downloaded successfully", source: "WhisperProvider")
                 return
             } catch let error as NSError {
+                if Task.isCancelled
+                    || (error.domain == NSURLErrorDomain && error.code == NSURLErrorCancelled)
+                {
+                    throw CancellationError()
+                }
                 let isLastAttempt = attempt == maxAttempts
 
                 // Provide user-friendly error messages
@@ -329,95 +315,96 @@ final class WhisperProvider: TranscriptionProvider {
 
     private func downloadFile(from url: URL, to destination: URL, progressHandler: ((Double) -> Void)?) async throws {
         let delegate = DownloadProgressDelegate(onProgress: progressHandler)
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-        let task = session.downloadTask(with: url)
+        let session = URLSession(configuration: self.urlSession.configuration, delegate: delegate, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let lock = NSLock()
-            var didResume = false
+        var temporaryURL: URL?
+        do {
+            let (downloadedURL, response) = try await withTaskCancellationHandler {
+                try await session.download(from: url)
+            } onCancel: {
+                session.invalidateAndCancel()
+            }
+            temporaryURL = downloadedURL
+            try Task.checkCancellation()
 
-            func resumeOnce(_ result: Result<Void, Error>) {
-                lock.lock()
-                defer { lock.unlock() }
-                guard !didResume else { return }
-                didResume = true
-                session.finishTasksAndInvalidate()
-                continuation.resume(with: result)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NSError(
+                    domain: "WhisperProvider",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Invalid server response"]
+                )
+            }
+            guard httpResponse.statusCode == 200 else {
+                throw NSError(
+                    domain: "WhisperProvider",
+                    code: httpResponse.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to download model (HTTP \(httpResponse.statusCode))"]
+                )
             }
 
-            delegate.onFinish = { tempURL, response in
-                do {
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        throw NSError(
-                            domain: "WhisperProvider",
-                            code: -1,
-                            userInfo: [NSLocalizedDescriptionKey: "Invalid server response"]
-                        )
-                    }
-
-                    guard httpResponse.statusCode == 200 else {
-                        throw NSError(
-                            domain: "WhisperProvider",
-                            code: httpResponse.statusCode,
-                            userInfo: [NSLocalizedDescriptionKey: "Failed to download model (HTTP \(httpResponse.statusCode))"]
-                        )
-                    }
-
-                    if httpResponse.expectedContentLength > 0 {
-                        let attrs = try FileManager.default.attributesOfItem(atPath: tempURL.path)
-                        if let size = attrs[.size] as? NSNumber,
-                           size.int64Value != httpResponse.expectedContentLength
-                        {
-                            throw NSError(
-                                domain: "WhisperProvider",
-                                code: -1,
-                                userInfo: [NSLocalizedDescriptionKey: "Downloaded model size mismatch. Please try again."]
-                            )
-                        }
-                    }
-
-                    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    if FileManager.default.fileExists(atPath: destination.path) {
-                        try FileManager.default.removeItem(at: destination)
-                    }
-                    try FileManager.default.moveItem(at: tempURL, to: destination)
-
-                    if !self.isModelFileValid(at: destination) {
-                        try? FileManager.default.removeItem(at: destination)
-                        throw NSError(
-                            domain: "WhisperProvider",
-                            code: -1,
-                            userInfo: [NSLocalizedDescriptionKey: "Downloaded model is invalid. Please try again."]
-                        )
-                    }
-                    resumeOnce(.success(()))
-                } catch {
-                    resumeOnce(.failure(error))
-                }
+            let attributes = try FileManager.default.attributesOfItem(atPath: downloadedURL.path)
+            let actualBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+            if httpResponse.expectedContentLength > 0,
+               actualBytes != httpResponse.expectedContentLength
+            {
+                throw NSError(
+                    domain: "WhisperProvider",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Downloaded model size mismatch. Please try again."]
+                )
             }
-            delegate.onError = { error in
-                resumeOnce(.failure(error))
+            guard
+                let expectedBytes = SettingsStore.SpeechModel.allCases
+                .first(where: { $0.whisperModelFile == destination.lastPathComponent })?
+                .expectedDownloadBytes,
+                actualBytes == expectedBytes
+            else {
+                throw NSError(
+                    domain: "WhisperProvider",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Downloaded model is invalid. Please try again."]
+                )
             }
-            task.resume()
+
+            try Task.checkCancellation()
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.moveItem(at: downloadedURL, to: destination)
+            temporaryURL = nil
+            try Task.checkCancellation()
+        } catch {
+            if let temporaryURL {
+                try? FileManager.default.removeItem(at: temporaryURL)
+            }
+            session.invalidateAndCancel()
+            let nsError = error as NSError
+            if Task.isCancelled
+                || error is CancellationError
+                || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
+            {
+                throw CancellationError()
+            }
+            throw error
         }
+        try Task.checkCancellation()
+        progressHandler?(1.0)
     }
 
-    private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
+    private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
         private let onProgress: ((Double) -> Void)?
-        var onFinish: ((URL, URLResponse) -> Void)?
-        var onError: ((Error) -> Void)?
 
         init(onProgress: ((Double) -> Void)?) {
             self.onProgress = onProgress
         }
 
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-            guard let response = downloadTask.response else { return }
-            self.onFinish?(location, response)
-        }
-
-        func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-            if let error = error { self.onError?(error) }
+            // The async URLSession API owns completion; this delegate only reports bytes.
         }
 
         func urlSession(
@@ -428,7 +415,7 @@ final class WhisperProvider: TranscriptionProvider {
             totalBytesExpectedToWrite: Int64
         ) {
             guard totalBytesExpectedToWrite > 0 else { return }
-            let pct = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+            let pct = min(0.999, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
             self.onProgress?(pct)
         }
     }

@@ -40,24 +40,6 @@ private actor TranscriptionExecutor {
     }
 }
 
-private actor ModelDownloadRegistry {
-    private var tasks: [String: Task<Void, Error>] = [:]
-
-    func run(for key: String, operation: @escaping () async throws -> Void) async throws {
-        if let existing = tasks[key] {
-            return try await existing.value
-        }
-
-        let task = Task {
-            try await operation()
-        }
-        self.tasks[key] = task
-        defer { tasks[key] = nil }
-
-        try await task.value
-    }
-}
-
 // swiftlint:disable type_body_length
 /// A comprehensive speech recognition service that handles real-time audio transcription.
 ///
@@ -107,16 +89,16 @@ final class ASRService: ObservableObject {
     @Published var isAsrReady: Bool = false
     @Published var isDownloadingModel: Bool = false
     @Published var isLoadingModel: Bool = false // True when loading cached model into memory (not downloading)
+    @Published private(set) var isCancellingModelPreparation: Bool = false
     @Published var modelsExistOnDisk: Bool = false
     @Published var downloadProgress: Double? = nil
     @Published var downloadingModelId: String? = nil // Tracks which model is currently being downloaded
+    @Published private(set) var isCancellingModelDownload: Bool = false
 
     private var isStarting: Bool = false // Guard against re-entrant start() calls
-    private var downloadProgressTask: Task<Void, Never>?
     private var hasCompletedFirstTranscription: Bool = false // Track if model has warmed up with first transcription
     private var lastBoostHitTerm: String?
     private var hasPendingParakeetVocabularyReload: Bool = false
-    private let downloadRegistry = ModelDownloadRegistry()
     private var vocabularyChangeObserver: NSObjectProtocol?
 
     // MARK: - Error Handling
@@ -128,6 +110,9 @@ final class ASRService: ObservableObject {
     /// Returns a user-friendly status message for model loading state
     var modelStatusMessage: String {
         if self.isAsrReady { return "Model ready" }
+        if self.isCancellingModelPreparation { return "Cancelling model preparation..." }
+        if self.isCancellingModelDownload { return "Cancelling model download..." }
+        if self.downloadingModelId != nil { return "Downloading model..." }
         if self.isDownloadingModel { return "Downloading model..." }
         if self.isLoadingModel { return "Loading model into memory..." }
         if self.modelsExistOnDisk { return "Model cached, needs loading" }
@@ -149,7 +134,34 @@ final class ASRService: ObservableObject {
     /// Prevent concurrent provider.prepare() calls (download/load) from overlapping.
     /// Subsequent callers await the in-flight task.
     private var ensureReadyTask: Task<Void, Error>?
+    private var ensureReadyTaskID: UUID?
     private var ensureReadyProviderKey: String?
+    private var ensureReadyOperationID: UUID?
+    private var modelDownloadTask: Task<Void, Error>?
+    private var modelDownloadOperationID: UUID?
+    private var modelExistenceCheckID: UUID?
+
+    var hasActiveModelPreparation: Bool {
+        self.ensureReadyTask != nil
+    }
+
+    var hasActiveModelDownload: Bool {
+        self.modelDownloadTask != nil
+    }
+
+    func cancelModelPreparation() {
+        guard let task = self.ensureReadyTask else { return }
+
+        DebugLogger.shared.info("Cancelling ASR model preparation", source: "ASRService")
+        self.isCancellingModelPreparation = true
+        task.cancel()
+    }
+
+    func cancelModelDownload() {
+        guard let task = self.modelDownloadTask else { return }
+        self.isCancellingModelDownload = true
+        task.cancel()
+    }
 
     /// The transcription provider, selected based on the unified SpeechModel setting.
     /// Uses the new SettingsStore.selectedSpeechModel instead of old TranscriptionProviderOption.
@@ -389,43 +401,72 @@ final class ASRService: ObservableObject {
     ///   - model: The model to download
     ///   - progressHandler: Optional callback for download progress (0.0 to 1.0)
     func downloadModel(_ model: SettingsStore.SpeechModel, progressHandler: ((Double) -> Void)?) async throws {
-        try await self.downloadRegistry.run(for: model.id) { [weak self] in
+        guard self.modelDownloadTask == nil, self.ensureReadyTask == nil else {
+            throw NSError(
+                domain: "ASRService",
+                code: -2001,
+                userInfo: [NSLocalizedDescriptionKey: "Another model operation is already in progress."]
+            )
+        }
+
+        let operationID = UUID()
+        let provider = self.getProvider(for: model)
+        let progressRelay = ModelPreparationProgressRelay(progressHandler)
+        self.modelDownloadOperationID = operationID
+        self.downloadingModelId = model.id
+        self.downloadProgress = 0.0
+        self.isCancellingModelDownload = false
+
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
-
-            await MainActor.run {
-                self.downloadingModelId = model.id
-            }
-
-            // Use do-catch to ensure cleanup happens regardless of success/failure
             do {
                 DebugLogger.shared.info("Downloading model: \(model.displayName) (without changing active selection)", source: "ASRService")
-
-                // Get a fresh provider for this specific model (uses modelOverride for Whisper)
-                let provider = await MainActor.run { self.getProvider(for: model) }
-
-                // Prepare (download) the model
                 try await provider.prepare(progressHandler: { progress in
                     let clamped = max(0.0, min(1.0, progress))
-                    progressHandler?(clamped)
+                    Task { @MainActor in
+                        guard
+                            self.modelDownloadOperationID == operationID,
+                            !self.isCancellingModelDownload
+                        else {
+                            return
+                        }
+                        let monotonic = max(self.downloadProgress ?? 0.0, clamped)
+                        self.downloadProgress = monotonic
+                        progressRelay.report(monotonic)
+                    }
                 })
-
+                try Task.checkCancellation()
                 DebugLogger.shared.info("Model download completed: \(model.displayName)", source: "ASRService")
-
-                // Synchronously clear downloadingModelId on success
-                await MainActor.run {
-                    if self.downloadingModelId == model.id {
-                        self.downloadingModelId = nil
-                    }
-                }
             } catch {
-                // Synchronously clear downloadingModelId on failure
-                await MainActor.run {
-                    if self.downloadingModelId == model.id {
-                        self.downloadingModelId = nil
-                    }
+                let wasCancelled = Task.isCancelled || Self.isModelPreparationCancellation(error)
+                if wasCancelled,
+                   provider.shouldClearCacheAfterCancellation,
+                   provider.modelsExistOnDisk() == false
+                {
+                    try? await provider.clearCache()
+                }
+                if wasCancelled {
+                    throw CancellationError()
                 }
                 throw error
             }
+        }
+        self.modelDownloadTask = task
+
+        defer {
+            if self.modelDownloadOperationID == operationID {
+                self.modelDownloadTask = nil
+                self.modelDownloadOperationID = nil
+                self.downloadingModelId = nil
+                self.downloadProgress = nil
+                self.isCancellingModelDownload = false
+            }
+        }
+
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -438,12 +479,19 @@ final class ASRService: ObservableObject {
         self.modelsExistOnDisk = false
         self.isLoadingModel = false
         self.isDownloadingModel = false
-        self.downloadProgress = nil
+        if !self.hasActiveModelDownload {
+            self.downloadProgress = nil
+        }
         self.hasCompletedFirstTranscription = false // Reset warm-up state when switching models
-        self.stopDownloadProgressMonitor()
-        self.ensureReadyTask?.cancel()
-        self.ensureReadyTask = nil
+        let retiringTask = self.ensureReadyTask
+        if let task = retiringTask {
+            self.isCancellingModelPreparation = true
+            task.cancel()
+        }
+        // Keep the task handle until its provider has stopped and cancellation cleanup has
+        // completed. The next ensureAsrReady call waits for it before touching the same cache.
         self.ensureReadyProviderKey = nil
+        self.ensureReadyOperationID = nil
         self.lastBoostHitTerm = nil
         self.wordBoostStatusText = "Word boost: off"
 
@@ -460,6 +508,8 @@ final class ASRService: ObservableObject {
         // Use Task for async check to support providers like AppleSpeechAnalyzerProvider
         Task { [weak self] in
             guard let self = self else { return }
+            _ = await retiringTask?.result
+            guard SettingsStore.shared.selectedSpeechModel == newModel else { return }
             await self.checkIfModelsExistAsync()
             await MainActor.run {
                 self.refreshWordBoostStatus()
@@ -716,6 +766,7 @@ final class ASRService: ObservableObject {
     /// **Note**: For `AppleSpeechAnalyzerProvider`, this returns a cached value that may be stale.
     /// Use `checkIfModelsExistAsync()` for an up-to-date result.
     func checkIfModelsExist() {
+        self.modelExistenceCheckID = UUID()
         self.modelsExistOnDisk = self.transcriptionProvider.modelsExistOnDisk()
         DebugLogger.shared.debug("Models exist on disk: \(self.modelsExistOnDisk)", source: "ASRService")
     }
@@ -726,20 +777,29 @@ final class ASRService: ObservableObject {
     /// (e.g., `AppleSpeechAnalyzerProvider` uses `SpeechTranscriber.installedLocales`).
     func checkIfModelsExistAsync() async {
         let model = SettingsStore.shared.selectedSpeechModel
+        let checkID = UUID()
+        self.modelExistenceCheckID = checkID
+        let exists: Bool
 
         // For Apple Speech Analyzer, use the async refresh method
         if model == .appleSpeechAnalyzer {
             if #available(macOS 26.0, *) {
                 let provider = self.getAppleSpeechAnalyzerProvider()
-                let isInstalled = await provider.refreshModelsExistOnDiskAsync()
-                self.modelsExistOnDisk = isInstalled
-                DebugLogger.shared.debug("Models exist on disk (async): \(self.modelsExistOnDisk)", source: "ASRService")
-                return
+                exists = await provider.refreshModelsExistOnDiskAsync()
+            } else {
+                exists = self.getAppleSpeechProvider().modelsExistOnDisk()
             }
+        } else {
+            exists = model.isInstalled
         }
 
-        // For other providers, use the synchronous method
-        self.modelsExistOnDisk = self.transcriptionProvider.modelsExistOnDisk()
+        guard
+            self.modelExistenceCheckID == checkID,
+            SettingsStore.shared.selectedSpeechModel == model
+        else {
+            return
+        }
+        self.modelsExistOnDisk = exists
         DebugLogger.shared.debug("Models exist on disk: \(self.modelsExistOnDisk)", source: "ASRService")
     }
 
@@ -2232,37 +2292,88 @@ final class ASRService: ObservableObject {
     /// Ensures ASR models are ready, with an optional external progress handler.
     /// - Parameter progressHandler: Optional callback for download progress (0.0 to 1.0)
     func ensureAsrReady(progressHandler: ((Double) -> Void)?) async throws {
+        guard self.modelDownloadTask == nil else {
+            throw NSError(
+                domain: "ASRService",
+                code: -2001,
+                userInfo: [NSLocalizedDescriptionKey: "Another model download is already in progress."]
+            )
+        }
         let provider = self.transcriptionProvider
-        let providerKey = "\(type(of: provider)):\(provider.name)"
         let model = SettingsStore.shared.selectedSpeechModel
+        let providerKey = "\(model.id):\(type(of: provider)):\(provider.name)"
         DebugLogger.shared.info(
             "ensureAsrReady() requested for model=\(model.id) [supportsStreaming=\(model.supportsStreaming)] provider=\(providerKey)",
             source: "ASRService"
         )
 
-        // Single-flight: if a prepare is already running for this provider, await it.
-        if let task = ensureReadyTask, ensureReadyProviderKey == providerKey {
-            try await task.value
-            return
-        }
+        // Single-flight for the same model. A reset invalidates the provider key but retains
+        // the retiring task so replacements can wait for cache cleanup before starting.
+        while let existingTask = self.ensureReadyTask {
+            let existingTaskID = self.ensureReadyTaskID
+            if self.ensureReadyProviderKey == providerKey,
+               self.ensureReadyOperationID == existingTaskID,
+               !self.isCancellingModelPreparation
+            {
+                try await existingTask.value
+                return
+            }
 
-        let task = Task { @MainActor in
-            try await self.performEnsureAsrReady(provider: provider, externalProgressHandler: progressHandler)
-        }
-        self.ensureReadyTask = task
-        self.ensureReadyProviderKey = providerKey
-
-        defer {
-            if ensureReadyProviderKey == providerKey {
-                ensureReadyTask = nil
-                ensureReadyProviderKey = nil
+            self.isCancellingModelPreparation = true
+            existingTask.cancel()
+            _ = await existingTask.result
+            if self.ensureReadyTaskID == existingTaskID {
+                self.ensureReadyTask = nil
+                self.ensureReadyTaskID = nil
+                self.ensureReadyProviderKey = nil
+                self.isCancellingModelPreparation = false
             }
         }
 
-        try await task.value
+        guard SettingsStore.shared.selectedSpeechModel == model else {
+            throw CancellationError()
+        }
+
+        let operationID = UUID()
+        let task = Task { @MainActor in
+            try await self.performEnsureAsrReady(
+                provider: provider,
+                operationID: operationID,
+                externalProgressHandler: progressHandler
+            )
+        }
+        self.ensureReadyTask = task
+        self.ensureReadyTaskID = operationID
+        self.ensureReadyProviderKey = providerKey
+        self.ensureReadyOperationID = operationID
+        self.isCancellingModelPreparation = false
+
+        defer {
+            if ensureReadyTaskID == operationID {
+                ensureReadyTask = nil
+                ensureReadyTaskID = nil
+                ensureReadyProviderKey = nil
+                if ensureReadyOperationID == operationID {
+                    ensureReadyOperationID = nil
+                }
+                isCancellingModelPreparation = false
+            }
+        }
+
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
-    private func performEnsureAsrReady(provider: TranscriptionProvider, externalProgressHandler: ((Double) -> Void)? = nil) async throws {
+    private func performEnsureAsrReady(
+        provider: TranscriptionProvider,
+        operationID: UUID,
+        externalProgressHandler: ((Double) -> Void)? = nil
+    ) async throws {
+        guard self.ensureReadyOperationID == operationID else { throw CancellationError() }
+        self.isCancellingModelPreparation = false
         DebugLogger.shared.debug(
             "ensureAsrReady(begin): provider=\(provider.name), providerReady=\(provider.isReady), isAsrReady=\(self.isAsrReady), isRunning=\(self.isRunning)",
             source: "ASRService"
@@ -2281,6 +2392,7 @@ final class ASRService: ObservableObject {
         }
 
         self.isAsrReady = false
+        let modelsAlreadyCached = provider.modelsExistOnDisk()
 
         let totalStartTime = Date()
         do {
@@ -2288,7 +2400,6 @@ final class ASRService: ObservableObject {
             DebugLogger.shared.info("=== ASR INITIALIZATION START ===", source: "ASRService")
             DebugLogger.shared.info("Using provider: \(provider.name) [providerReady=\(provider.isReady)]", source: "ASRService")
 
-            let modelsAlreadyCached = provider.modelsExistOnDisk()
             DebugLogger.shared.info("Models already cached on disk: \(modelsAlreadyCached)", source: "ASRService")
             DebugLogger.shared.debug("Model cache lookup complete in \(String(format: "%.3f", Date().timeIntervalSince(totalStartTime)))s", source: "ASRService")
 
@@ -2314,21 +2425,19 @@ final class ASRService: ObservableObject {
                 }
             }
 
-            // Set correct loading state based on whether models are cached
-            DispatchQueue.main.async {
-                if modelsAlreadyCached {
-                    self.isLoadingModel = true
-                    self.isDownloadingModel = false
-                    self.downloadProgress = nil
-                    self.stopDownloadProgressMonitor()
-                    DebugLogger.shared.info("📦 LOADING cached model into memory...", source: "ASRService")
-                } else {
-                    self.isDownloadingModel = true
-                    self.isLoadingModel = false
-                    self.downloadProgress = nil
-                    self.startParakeetDownloadProgressMonitor()
-                    DebugLogger.shared.info("⬇️ DOWNLOADING model...", source: "ASRService")
-                }
+            // Set correct loading state based on whether models are cached.
+            try Task.checkCancellation()
+            guard self.ensureReadyOperationID == operationID else { throw CancellationError() }
+            if modelsAlreadyCached {
+                self.isLoadingModel = true
+                self.isDownloadingModel = false
+                self.downloadProgress = nil
+                DebugLogger.shared.info("📦 LOADING cached model into memory...", source: "ASRService")
+            } else {
+                self.isDownloadingModel = true
+                self.isLoadingModel = false
+                self.downloadProgress = 0.0
+                DebugLogger.shared.info("⬇️ DOWNLOADING model...", source: "ASRService")
             }
 
             // Use the transcription provider to prepare models
@@ -2339,44 +2448,93 @@ final class ASRService: ObservableObject {
                 modelsAlreadyCached: modelsAlreadyCached,
                 progressHandler: { [weak self] progress in
                     DispatchQueue.main.async {
+                        guard
+                            let self,
+                            self.ensureReadyOperationID == operationID,
+                            self.isDownloadingModel,
+                            !self.isCancellingModelPreparation
+                        else {
+                            return
+                        }
                         let clamped = max(0.0, min(1.0, progress))
-                        let monotonic = max(self?.downloadProgress ?? 0.0, clamped)
-                        self?.downloadProgress = monotonic
+                        let monotonic = max(self.downloadProgress ?? 0.0, clamped)
+                        self.downloadProgress = monotonic
                         externalProgressHandler?(monotonic)
+                        if clamped >= 1.0 {
+                            self.isDownloadingModel = false
+                            self.isLoadingModel = true
+                            self.downloadProgress = nil
+                        }
                     }
                 }
             )
+            try Task.checkCancellation()
+            guard self.ensureReadyOperationID == operationID else { throw CancellationError() }
             let downloadDuration = Date().timeIntervalSince(downloadStartTime)
             DebugLogger.shared.info("✓ Provider preparation completed in \(String(format: "%.1f", downloadDuration)) seconds", source: "ASRService")
 
-            DispatchQueue.main.async {
-                self.isDownloadingModel = false
-                // Keep isLoadingModel true until first transcription completes (for large models that need warm-up)
-                if !self.hasCompletedFirstTranscription {
-                    self.isLoadingModel = true
-                    DebugLogger.shared.info("⏳ Model loaded, waiting for first transcription to complete...", source: "ASRService")
-                } else {
-                    self.isLoadingModel = false
-                }
-                self.downloadProgress = nil
-                self.stopDownloadProgressMonitor()
-                self.modelsExistOnDisk = true
+            self.isDownloadingModel = false
+            // Keep isLoadingModel true until first transcription completes (for large models that need warm-up)
+            if !self.hasCompletedFirstTranscription {
+                self.isLoadingModel = true
+                DebugLogger.shared.info("⏳ Model loaded, waiting for first transcription to complete...", source: "ASRService")
+            } else {
+                self.isLoadingModel = false
             }
+            self.downloadProgress = nil
+            self.modelsExistOnDisk = true
 
             let totalDuration = Date().timeIntervalSince(initializationStart)
             DebugLogger.shared.info("=== ASR INITIALIZATION COMPLETE ===", source: "ASRService")
             DebugLogger.shared.info("Total initialization time: \(String(format: "%.1f", totalDuration)) seconds", source: "ASRService")
 
             self.isAsrReady = true
+            self.isCancellingModelPreparation = false
             self.refreshWordBoostStatus()
-        } catch {
-            DebugLogger.shared.error("ASR initialization failed with error: \(error)", source: "ASRService")
-            DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
-            DispatchQueue.main.async {
+        } catch is CancellationError {
+            DebugLogger.shared.info("ASR initialization cancelled", source: "ASRService")
+            if provider.shouldClearCacheAfterCancellation,
+               provider.modelsExistOnDisk() == false
+            {
+                do {
+                    try await provider.clearCache()
+                } catch {
+                    DebugLogger.shared.warning(
+                        "Failed to clear incomplete model cache after cancellation: \(error)",
+                        source: "ASRService"
+                    )
+                }
+            }
+            if self.ensureReadyOperationID == operationID {
                 self.isDownloadingModel = false
                 self.isLoadingModel = false
                 self.downloadProgress = nil
-                self.stopDownloadProgressMonitor()
+                self.modelsExistOnDisk = provider.modelsExistOnDisk()
+                self.isCancellingModelPreparation = false
+            }
+            throw CancellationError()
+        } catch {
+            if Task.isCancelled || Self.isModelPreparationCancellation(error) {
+                if provider.shouldClearCacheAfterCancellation,
+                   provider.modelsExistOnDisk() == false
+                {
+                    try? await provider.clearCache()
+                }
+                if self.ensureReadyOperationID == operationID {
+                    self.isDownloadingModel = false
+                    self.isLoadingModel = false
+                    self.downloadProgress = nil
+                    self.modelsExistOnDisk = provider.modelsExistOnDisk()
+                    self.isCancellingModelPreparation = false
+                }
+                throw CancellationError()
+            }
+            DebugLogger.shared.error("ASR initialization failed with error: \(error)", source: "ASRService")
+            DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
+            if self.ensureReadyOperationID == operationID {
+                self.isDownloadingModel = false
+                self.isLoadingModel = false
+                self.downloadProgress = nil
             }
             throw error
         }
@@ -2397,6 +2555,9 @@ final class ASRService: ObservableObject {
             )
             return
         } catch {
+            if Task.isCancelled || Self.isModelPreparationCancellation(error) {
+                throw CancellationError()
+            }
             firstError = error
             DebugLogger.shared.error("ASRService: First prepare attempt for \(provider.name) failed after \(String(format: "%.2f", Date().timeIntervalSince(start)))s", source: "ASRService")
             DebugLogger.shared.warning(
@@ -2418,6 +2579,7 @@ final class ASRService: ObservableObject {
             )
         }
 
+        try Task.checkCancellation()
         do {
             DebugLogger.shared.info("ASRService: Clearing provider cache before retry for \(provider.name)", source: "ASRService")
             try await provider.clearCache()
@@ -2429,7 +2591,15 @@ final class ASRService: ObservableObject {
         }
 
         // One strict retry. If this fails, we let the caller handle the error.
-        try await provider.prepare(progressHandler: progressHandler)
+        try Task.checkCancellation()
+        do {
+            try await provider.prepare(progressHandler: progressHandler)
+        } catch {
+            if Task.isCancelled || Self.isModelPreparationCancellation(error) {
+                throw CancellationError()
+            }
+            throw error
+        }
         DebugLogger.shared.info(
             "ASRService: Provider '\(provider.name)' prepared successfully after cache-clear retry",
             source: "ASRService"
@@ -2441,85 +2611,10 @@ final class ASRService: ObservableObject {
         return "Unknown error"
     }
 
-    private func startParakeetDownloadProgressMonitor() {
-        let model = SettingsStore.shared.selectedSpeechModel
-        guard model == .parakeetTDT || model == .parakeetTDTv2 || model == .parakeetRealtime else { return }
-        guard let modelDir = self.parakeetCacheDirectory(for: model) else { return }
-
-        self.stopDownloadProgressMonitor()
-        self.downloadProgress = 0.0
-
-        let estimatedBytes = self.estimatedParakeetSizeBytes(for: model)
-        self.downloadProgressTask = Task(priority: .background) { [weak self] in
-            guard let self = self else { return }
-            while !Task.isCancelled {
-                let isDownloading = await MainActor.run { self.isDownloadingModel }
-                if !isDownloading { break }
-                let size = self.directorySize(at: modelDir)
-                let pct = estimatedBytes > 0 ? min(0.99, Double(size) / Double(estimatedBytes)) : 0.0
-                await MainActor.run {
-                    self.downloadProgress = max(self.downloadProgress ?? 0.0, pct)
-                }
-                try? await Task.sleep(nanoseconds: 700_000_000)
-            }
-        }
-    }
-
-    private func stopDownloadProgressMonitor() {
-        self.downloadProgressTask?.cancel()
-        self.downloadProgressTask = nil
-    }
-
-    private func parakeetCacheDirectory(for model: SettingsStore.SpeechModel) -> URL? {
-        #if arch(arm64)
-        let baseCacheDir = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
-        let folder: String
-        switch model {
-        case .parakeetTDTv2:
-            folder = "parakeet-tdt-0.6b-v2-coreml"
-        case .parakeetRealtime:
-            folder = "parakeet-eou-streaming"
-        default:
-            folder = "parakeet-tdt-0.6b-v3-coreml"
-        }
-        return baseCacheDir.appendingPathComponent(folder)
-        #else
-        return nil
-        #endif
-    }
-
-    private func estimatedParakeetSizeBytes(for model: SettingsStore.SpeechModel) -> Int64 {
-        // Approximate size for progress display only.
-        switch model {
-        case .parakeetTDT, .parakeetTDTv2:
-            return 520 * 1024 * 1024
-        case .parakeetRealtime:
-            return 250 * 1024 * 1024
-        default:
-            return 0
-        }
-    }
-
-    private func directorySize(at url: URL) -> Int64 {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return 0
-        }
-
-        var total: Int64 = 0
-        for case let fileURL as URL in enumerator {
-            if let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
-               values.isRegularFile == true,
-               let size = values.fileSize
-            {
-                total += Int64(size)
-            }
-        }
-        return total
+    private nonisolated static func isModelPreparationCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     // MARK: - Model lifecycle helpers (parity with original API)
@@ -2532,6 +2627,8 @@ final class ASRService: ObservableObject {
             do {
                 try await self.ensureAsrReady()
                 DebugLogger.shared.info("Model predownload completed successfully", source: "ASRService")
+            } catch is CancellationError {
+                DebugLogger.shared.info("Model predownload cancelled", source: "ASRService")
             } catch {
                 DebugLogger.shared.error("Model predownload failed: \(error)", source: "ASRService")
                 self.errorTitle = "Download Failed"

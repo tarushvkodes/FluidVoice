@@ -175,7 +175,7 @@ struct CommandModeView: View {
     // MARK: - How To Section
 
     private var shortcutDisplay: String {
-        self.settings.commandModeHotkeyShortcut.displayString
+        self.settings.commandModeHotkeyShortcut?.displayString ?? "Not set"
     }
 
     private var howToSection: some View {

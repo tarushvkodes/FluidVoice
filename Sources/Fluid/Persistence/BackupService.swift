@@ -25,7 +25,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let promptModeShortcutEnabled: Bool
     let promptModeSelectedPromptID: String?
     let secondaryDictationPromptOff: Bool?
-    let commandModeHotkeyShortcut: HotkeyShortcut
+    let commandModeHotkeyShortcut: HotkeyShortcut?
     let commandModeShortcutEnabled: Bool
     let commandModeSelectedModel: String?
     let commandModeSelectedProviderID: String

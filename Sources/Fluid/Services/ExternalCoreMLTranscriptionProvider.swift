@@ -23,6 +23,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     }
 
     func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+        try Task.checkCancellation()
         guard self.isReady == false else { return }
 
         let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
@@ -51,8 +52,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             at: directory,
             progressHandler: progressHandler
         )
-
-        progressHandler?(0.85)
+        try Task.checkCancellation()
 
         self.loadedManifest = try spec.loadManifest(at: directory)
         try self.loadCoherePromptConfigurationIfNeeded(at: directory, backend: spec.backend)
@@ -60,7 +60,6 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         switch spec.backend {
         case .cohereTranscribe:
             let manager = CohereTranscribeAsrManager()
-            progressHandler?(0.9)
             try self.invalidateCompiledCohereCacheIfNeeded(at: directory)
             let computeSummary = [
                 String(describing: spec.computeConfiguration.frontend),
@@ -73,16 +72,17 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
                 source: "ExternalCoreML"
             )
             try await manager.loadModels(from: directory, computeConfiguration: spec.computeConfiguration)
+            try Task.checkCancellation()
             self.cohereManager = manager
             self.persistCompiledCohereCacheStamp(at: directory)
         }
 
+        try Task.checkCancellation()
         self.isReady = true
         DebugLogger.shared.info(
             "ExternalCoreML: provider ready for model=\(model.rawValue)",
             source: "ExternalCoreML"
         )
-        progressHandler?(1.0)
     }
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -174,7 +174,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         else {
             return false
         }
-        return spec.validateArtifacts(at: directory)
+        return spec.validatesInstalledArtifacts(at: directory)
     }
 
     func clearCache() async throws {
@@ -197,7 +197,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             try FileManager.default.removeItem(at: compiledDirectory)
         }
 
-        if FileManager.default.fileExists(atPath: directory.path), Self.isAppManagedArtifactsDirectory(directory, spec: spec) {
+        if FileManager.default.fileExists(atPath: directory.path), spec.isAppManagedArtifactsDirectory(directory) {
             DebugLogger.shared.info(
                 "ExternalCoreML: removing downloaded artifacts at \(directory.path)",
                 source: "ExternalCoreML"
@@ -228,7 +228,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         progressHandler: ((Double) -> Void)?
     ) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let isManagedDirectory = Self.isAppManagedArtifactsDirectory(directory, spec: spec)
+        let isManagedDirectory = spec.isAppManagedArtifactsDirectory(directory)
 
         // `validateArtifacts` proves the required entries exist and the manifest JSON decodes, but
         // it does NOT byte-check the `.mlpackage` binaries — a network proxy can have returned an
@@ -239,7 +239,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         // managed cache is still fully removed even if it is also markup-corrupt, so the bundle
         // is wholly refreshed rather than only the corrupt files re-fetched. See #353.
         if spec.validateArtifacts(at: directory) {
-            if isManagedDirectory, self.artifactBundleStampMatches(spec: spec, directory: directory) == false {
+            if isManagedDirectory, spec.artifactBundleStampMatches(at: directory) == false {
                 DebugLogger.shared.warning(
                     "ExternalCoreML: refreshing managed artifacts for \(directory.lastPathComponent) due to outdated bundle stamp",
                     source: "ExternalCoreML"
@@ -256,18 +256,17 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
                     "ExternalCoreML: artifact validation passed for \(directory.lastPathComponent)",
                     source: "ExternalCoreML"
                 )
-                progressHandler?(0.8)
                 return
             }
         }
 
         if spec.validateArtifacts(at: directory),
-           !Self.cachedArtifactsAreMarkupCorrupt(spec: spec, directory: directory) {
+           !Self.cachedArtifactsAreMarkupCorrupt(spec: spec, directory: directory)
+        {
             DebugLogger.shared.info(
                 "ExternalCoreML: artifact validation passed for \(directory.lastPathComponent)",
                 source: "ExternalCoreML"
             )
-            progressHandler?(0.8)
             return
         }
 
@@ -291,8 +290,11 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
                 "ExternalCoreML: download progress \(Int(progress * 100))% [\(item)]",
                 source: "ExternalCoreML"
             )
-            progressHandler?(progress * 0.8)
+            // The managed-cache stamp below is part of installation truth. Keep the transfer
+            // below 100% until structural validation succeeds and that stamp is persisted.
+            progressHandler?(min(progress, 0.999))
         }
+        try Task.checkCancellation()
 
         do {
             try spec.validateArtifactsOrThrow(at: directory)
@@ -301,9 +303,10 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         }
 
         if isManagedDirectory {
-            self.persistArtifactBundleStamp(spec: spec, directory: directory)
+            spec.persistArtifactBundleStamp(at: directory)
         }
         SettingsStore.shared.setExternalCoreMLArtifactsDirectory(directory, for: model)
+        progressHandler?(1.0)
     }
 
     private static func artifactsDirectory(
@@ -311,14 +314,6 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         spec: ExternalCoreMLASRModelSpec
     ) -> URL? {
         SettingsStore.shared.externalCoreMLArtifactsDirectory(for: model) ?? spec.defaultCacheDirectory
-    }
-
-    private static func isAppManagedArtifactsDirectory(
-        _ directory: URL,
-        spec: ExternalCoreMLASRModelSpec
-    ) -> Bool {
-        guard let defaultCacheDirectory = spec.defaultCacheDirectory else { return false }
-        return directory.standardizedFileURL.path == defaultCacheDirectory.standardizedFileURL.path
     }
 
     /// `true` if any required cached artifact is an HTML/markup payload instead of model data — a
@@ -340,26 +335,6 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             code: -1,
             userInfo: [NSLocalizedDescriptionKey: description]
         )
-    }
-
-    private func artifactBundleStampMatches(spec: ExternalCoreMLASRModelSpec, directory: URL) -> Bool {
-        let stampURL = Self.artifactBundleStampURL(for: directory)
-        guard
-            let currentStamp = try? String(contentsOf: stampURL, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        else {
-            return false
-        }
-        return currentStamp == spec.artifactBundleVersion
-    }
-
-    private func persistArtifactBundleStamp(spec: ExternalCoreMLASRModelSpec, directory: URL) {
-        let stampURL = Self.artifactBundleStampURL(for: directory)
-        try? spec.artifactBundleVersion.write(to: stampURL, atomically: true, encoding: .utf8)
-    }
-
-    private static func artifactBundleStampURL(for directory: URL) -> URL {
-        directory.appendingPathComponent(".fluid_artifact_bundle_version", isDirectory: false)
     }
 
     private func invalidateCompiledCohereCacheIfNeeded(at directory: URL) throws {

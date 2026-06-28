@@ -17,7 +17,7 @@ private enum OverlayShortcutResolver {
         case .edit, .write, .rewrite:
             return settings.rewriteModeHotkeyShortcut.displayString
         case .command:
-            return settings.commandModeHotkeyShortcut.displayString
+            return settings.commandModeHotkeyShortcut?.displayString ?? "Not set"
         }
     }
 }

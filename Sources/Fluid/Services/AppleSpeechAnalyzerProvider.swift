@@ -20,6 +20,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     }
 
     private(set) var isReady: Bool = false
+    var shouldClearCacheAfterCancellation: Bool { false }
 
     /// Buffer converter for audio format conversion
     private var converter: BufferConverter?
@@ -38,6 +39,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     // MARK: - Lifecycle
 
     func prepare(progressHandler: ((Double) -> Void)?) async throws {
+        try Task.checkCancellation()
         let locale = self.selectedSpeechLocale()
         let localeID = self.normalizedIdentifier(for: locale)
 
@@ -51,6 +53,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
 
         // 2. Check if locale is supported
         let supportedLocales = await SpeechTranscriber.supportedLocales
+        try Task.checkCancellation()
         let isSupported = supportedLocales.map { self.normalizedIdentifier(for: $0) }.contains(localeID)
 
         guard isSupported else {
@@ -63,6 +66,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
 
         // 3. Check if model is installed, download if needed
         let installedLocales = await SpeechTranscriber.installedLocales
+        try Task.checkCancellation()
         let isInstalled = installedLocales.map { self.normalizedIdentifier(for: $0) }.contains(localeID)
 
         if !isInstalled {
@@ -70,21 +74,42 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
             if let downloader = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                 // Report progress periodically during download
                 let progress = downloader.progress
-                Task {
-                    while !progress.isFinished, !progress.isCancelled {
+                let progressTask = Task {
+                    while !Task.isCancelled, !progress.isFinished, !progress.isCancelled {
                         progressHandler?(progress.fractionCompleted)
                         try? await Task.sleep(for: .milliseconds(100))
                     }
                 }
-                try await downloader.downloadAndInstall()
+                defer { progressTask.cancel() }
+
+                do {
+                    try await withTaskCancellationHandler {
+                        try await downloader.downloadAndInstall()
+                    } onCancel: {
+                        progress.cancel()
+                    }
+                } catch {
+                    let nsError = error as NSError
+                    if Task.isCancelled
+                        || error is CancellationError
+                        || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled)
+                    {
+                        throw CancellationError()
+                    }
+                    throw error
+                }
+                try Task.checkCancellation()
+                progressHandler?(1.0)
             }
         }
 
         // 4. Get the best available audio format for conversion
         self.analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
+        try Task.checkCancellation()
         self.converter = BufferConverter()
         self.preparedLocale = locale
 
+        try Task.checkCancellation()
         self.isReady = true
 
         // Update cache to reflect that model is now installed (thread-safe)
