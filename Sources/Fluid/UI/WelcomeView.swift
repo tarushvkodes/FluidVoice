@@ -19,6 +19,9 @@ struct WelcomeView: View {
     @Binding var selectedSidebarItem: SidebarItem?
     @Binding var playgroundUsed: Bool
     var isTranscriptionFocused: FocusState<Bool>.Binding
+    @State private var isHowToUseExpanded = false
+    @State private var isCommandModeGuideExpanded = false
+    @State private var isEditModeGuideExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.theme) private var theme
 
@@ -340,46 +343,45 @@ struct WelcomeView: View {
                     // Secondary guidance
                     ThemedCard(style: .subtle) {
                         VStack(alignment: .leading, spacing: 12) {
-                            DisclosureGroup {
+                            self.guideDisclosureRow(
+                                title: "How to Use",
+                                systemImage: "play.fill",
+                                color: self.theme.palette.accent,
+                                isExpanded: self.$isHowToUseExpanded,
+                                accessories: { EmptyView() }
+                            ) {
                                 VStack(alignment: .leading, spacing: 10) {
                                     self.howToStep(number: 1, title: "Start Recording", description: "Press your hotkey (default: Right Option/Alt) or click the button")
                                     self.howToStep(number: 2, title: "Speak Clearly", description: "Speak naturally - works best in quiet environments")
                                     self.howToStep(number: 3, title: "Auto-Type Result", description: "Transcription is automatically typed into your focused app")
                                 }
-                                .padding(.top, 8)
-                            } label: {
-                                Label("How to Use", systemImage: "play.fill")
-                                    .font(self.theme.typography.sectionTitle)
-                                    .foregroundStyle(self.theme.palette.accent)
                             }
 
                             Divider().opacity(0.2)
 
-                            DisclosureGroup {
+                            self.guideDisclosureRow(
+                                title: "Command Mode",
+                                systemImage: "terminal.fill",
+                                color: self.commandModeColor,
+                                isExpanded: self.$isCommandModeGuideExpanded
+                            ) {
+                                self.featureBadge("New", color: self.commandModeColor)
+                                self.featureBadge("Alpha", color: self.commandModeColor.opacity(0.75))
+                            } content: {
                                 self.commandModeGuide
-                                    .padding(.top, 8)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Label("Command Mode", systemImage: "terminal.fill")
-                                        .font(self.theme.typography.sectionTitle)
-                                        .foregroundStyle(self.commandModeColor)
-                                    self.featureBadge("New", color: self.commandModeColor)
-                                    self.featureBadge("Alpha", color: self.commandModeColor.opacity(0.75))
-                                }
                             }
 
                             Divider().opacity(0.2)
 
-                            DisclosureGroup {
+                            self.guideDisclosureRow(
+                                title: "Edit Mode",
+                                systemImage: "pencil.and.outline",
+                                color: self.editModeColor,
+                                isExpanded: self.$isEditModeGuideExpanded
+                            ) {
+                                self.featureBadge("New", color: self.editModeColor)
+                            } content: {
                                 self.editModeGuide
-                                    .padding(.top, 8)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Label("Edit Mode", systemImage: "pencil.and.outline")
-                                        .font(self.theme.typography.sectionTitle)
-                                        .foregroundStyle(self.editModeColor)
-                                    self.featureBadge("New", color: self.editModeColor)
-                                }
                             }
                         }
                         .padding(12)
@@ -402,6 +404,50 @@ struct WelcomeView: View {
     }
 
     // MARK: - Helper Views
+
+    private func guideDisclosureRow<Accessories: View, Content: View>(
+        title: String,
+        systemImage: String,
+        color: Color,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder accessories: () -> Accessories,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(self.reduceMotion ? nil : .easeInOut(duration: 0.16)) {
+                    isExpanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
+                        .frame(width: 16)
+
+                    Label(title, systemImage: systemImage)
+                        .font(self.theme.typography.sectionTitle)
+                        .foregroundStyle(color)
+
+                    accessories()
+
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(title))
+            .accessibilityValue(Text(isExpanded.wrappedValue ? "Expanded" : "Collapsed"))
+
+            if isExpanded.wrappedValue {
+                content()
+                    .padding(.top, 8)
+                    .padding(.leading, 26)
+            }
+        }
+    }
 
     private var commandModeGuide: some View {
         VStack(alignment: .leading, spacing: 12) {
