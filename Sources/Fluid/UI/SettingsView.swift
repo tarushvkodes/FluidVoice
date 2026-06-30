@@ -2285,7 +2285,7 @@ struct SettingsView: View {
                 Color.clear
                     .frame(width: 20)
 
-                if isRecording && enabledValue {
+                if isRecording {
                     self.shortcutCapturePill()
                 } else {
                     self.shortcutDisplayPill(shortcut?.displayString ?? "Not set")

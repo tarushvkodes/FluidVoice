@@ -2528,6 +2528,13 @@ struct ContentView: View {
         }
 
         Task { @MainActor in
+            // The hotkey fires on key-down while its own modifier keys (e.g. ⌘⌃) are still
+            // physically held. Synthesizing text in that state makes the target app treat the
+            // characters as keyboard shortcuts and drop them, so wait for the modifiers to be
+            // released before inserting. (Dictation never hits this because by the time it types,
+            // no keys are held.)
+            await Self.waitForHotkeyModifiersReleased(timeout: 0.6)
+
             let typingTarget = self.resolveTypingTargetPID()
             guard typingTarget.pid != nil else {
                 DebugLogger.shared.info("Actions: Paste skipped - no external target field available", source: "ContentView")
@@ -2538,6 +2545,20 @@ struct ContentView: View {
             }
             self.asr.typeTextToActiveField(text, preferredTargetPID: typingTarget.pid)
             DebugLogger.shared.info("Actions: Pasted latest transcription into focused field", source: "ContentView")
+        }
+    }
+
+    /// Polls until the keyboard modifier keys are released (or the timeout elapses). Used before
+    /// synthesizing a paste so the inserted characters aren't swallowed as modifier+key shortcuts.
+    private static func waitForHotkeyModifiersReleased(timeout: TimeInterval) async {
+        let relevant: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeout {
+            let flags = CGEventSource.flagsState(.combinedSessionState)
+            if flags.isDisjoint(with: relevant) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 15_000_000) // 15ms
         }
     }
 
