@@ -2999,10 +2999,10 @@ struct ContentView: View {
         }
 
         Task {
+            if shouldPlayStartSound, !self.asr.isRunning {
+                TranscriptionSoundPlayer.shared.playStartSound()
+            }
             await self.asr.start(onCaptureStarted: {
-                if shouldPlayStartSound {
-                    TranscriptionSoundPlayer.shared.playStartSound()
-                }
                 self.captureRecordingContext()
                 self.prewarmPrivateAIDictationIfNeeded(for: .primary)
                 if shouldShowDictationOverlay {
@@ -3610,10 +3610,10 @@ extension ContentView {
         Task {
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
+            if SettingsStore.shared.enableTranscriptionSounds, !self.asr.isRunning {
+                TranscriptionSoundPlayer.shared.playStartSound()
+            }
             await self.asr.start(onCaptureStarted: {
-                if SettingsStore.shared.enableTranscriptionSounds {
-                    TranscriptionSoundPlayer.shared.playStartSound()
-                }
                 self.captureRecordingContext()
                 self.applyDictationPromptConfiguration(for: SettingsStore.shared.dictationPromptSelection(for: slot))
                 self.appBench("overlay_mode_request mode=Dictation")
