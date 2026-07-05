@@ -93,6 +93,7 @@ final class ASRService: ObservableObject {
     @Published private(set) var isCancellingModelPreparation: Bool = false
     @Published var modelsExistOnDisk: Bool = false
     @Published var downloadProgress: Double? = nil
+    @Published var modelPreparationPhase: ModelPreparationPhase? = nil
     @Published var downloadingModelId: String? = nil // Tracks which model is currently being downloaded
     @Published private(set) var isCancellingModelDownload: Bool = false
     @Published private(set) var isDictionaryTrainingCaptureActive: Bool = false
@@ -114,11 +115,31 @@ final class ASRService: ObservableObject {
         if self.isAsrReady { return "Model ready" }
         if self.isCancellingModelPreparation { return "Cancelling model preparation..." }
         if self.isCancellingModelDownload { return "Cancelling model download..." }
-        if self.downloadingModelId != nil { return "Downloading model..." }
-        if self.isDownloadingModel { return "Downloading model..." }
-        if self.isLoadingModel { return "Loading model into memory..." }
+        if self.downloadingModelId != nil || self.isDownloadingModel || self.isLoadingModel {
+            return self.modelPreparationStatusText
+        }
         if self.modelsExistOnDisk { return "Model cached, needs loading" }
         return "Model not downloaded"
+    }
+
+    var modelPreparationStatusText: String {
+        switch self.modelPreparationPhase {
+        case .preparingDownload:
+            return "Preparing download..."
+        case .downloading:
+            if let progress = self.downloadProgress {
+                return "Downloading \(Int(progress * 100))%"
+            }
+            return "Downloading model..."
+        case .optimizing:
+            return "Optimizing model..."
+        case .loading:
+            return "Loading voice engine..."
+        case nil:
+            if self.isDownloadingModel { return "Preparing model..." }
+            if self.isLoadingModel { return "Loading voice engine..." }
+            return "Preparing model..."
+        }
     }
 
     // MARK: - Transcription Provider (Settable)
@@ -413,10 +434,10 @@ final class ASRService: ObservableObject {
 
         let operationID = UUID()
         let provider = self.getProvider(for: model)
-        let progressRelay = ModelPreparationProgressRelay(progressHandler)
         self.modelDownloadOperationID = operationID
         self.downloadingModelId = model.id
-        self.downloadProgress = 0.0
+        self.downloadProgress = nil
+        self.modelPreparationPhase = .preparingDownload
         self.isCancellingModelDownload = false
 
         let task = Task { @MainActor [weak self] in
@@ -424,7 +445,6 @@ final class ASRService: ObservableObject {
             do {
                 DebugLogger.shared.info("Downloading model: \(model.displayName) (without changing active selection)", source: "ASRService")
                 try await provider.prepare(progressHandler: { progress in
-                    let clamped = max(0.0, min(1.0, progress))
                     Task { @MainActor in
                         guard
                             self.modelDownloadOperationID == operationID,
@@ -432,9 +452,11 @@ final class ASRService: ObservableObject {
                         else {
                             return
                         }
-                        let monotonic = max(self.downloadProgress ?? 0.0, clamped)
-                        self.downloadProgress = monotonic
-                        progressRelay.report(monotonic)
+                        self.applyModelPreparationProgress(
+                            progress,
+                            updatesActiveModelState: false,
+                            externalProgressHandler: progressHandler
+                        )
                     }
                 })
                 try Task.checkCancellation()
@@ -461,6 +483,7 @@ final class ASRService: ObservableObject {
                 self.modelDownloadOperationID = nil
                 self.downloadingModelId = nil
                 self.downloadProgress = nil
+                self.modelPreparationPhase = nil
                 self.isCancellingModelDownload = false
             }
         }
@@ -483,6 +506,7 @@ final class ASRService: ObservableObject {
         self.isDownloadingModel = false
         if !self.hasActiveModelDownload {
             self.downloadProgress = nil
+            self.modelPreparationPhase = nil
         }
         self.hasCompletedFirstTranscription = false // Reset warm-up state when switching models
         let retiringTask = self.ensureReadyTask
@@ -1480,6 +1504,7 @@ final class ASRService: ObservableObject {
                 self.hasCompletedFirstTranscription = true
                 DispatchQueue.main.async {
                     self.isLoadingModel = false
+                    self.modelPreparationPhase = nil
                     DebugLogger.shared.info("✅ Model warmed up - first transcription completed", source: "ASRService")
                 }
             }
@@ -1526,6 +1551,7 @@ final class ASRService: ObservableObject {
                 self.hasCompletedFirstTranscription = true
                 DispatchQueue.main.async {
                     self.isLoadingModel = false
+                    self.modelPreparationPhase = nil
                     DebugLogger.shared.info("⚠️ First transcription failed - clearing loading state", source: "ASRService")
                 }
             }
@@ -1573,6 +1599,7 @@ final class ASRService: ObservableObject {
         if !self.hasCompletedFirstTranscription {
             self.hasCompletedFirstTranscription = true
             self.isLoadingModel = false
+            self.modelPreparationPhase = nil
         }
 
         let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
@@ -1614,6 +1641,7 @@ final class ASRService: ObservableObject {
         if !self.hasCompletedFirstTranscription {
             self.hasCompletedFirstTranscription = true
             self.isLoadingModel = false
+            self.modelPreparationPhase = nil
         }
 
         let cleanedText = ASRService.applyCustomDictionary(ASRService.removeFillerWords(result.text))
@@ -2764,11 +2792,13 @@ final class ASRService: ObservableObject {
                 self.isLoadingModel = true
                 self.isDownloadingModel = false
                 self.downloadProgress = nil
+                self.modelPreparationPhase = .loading
                 DebugLogger.shared.info("📦 LOADING cached model into memory...", source: "ASRService")
             } else {
                 self.isDownloadingModel = true
                 self.isLoadingModel = false
-                self.downloadProgress = 0.0
+                self.downloadProgress = nil
+                self.modelPreparationPhase = .preparingDownload
                 DebugLogger.shared.info("⬇️ DOWNLOADING model...", source: "ASRService")
             }
 
@@ -2783,20 +2813,15 @@ final class ASRService: ObservableObject {
                         guard
                             let self,
                             self.ensureReadyOperationID == operationID,
-                            self.isDownloadingModel,
                             !self.isCancellingModelPreparation
                         else {
                             return
                         }
-                        let clamped = max(0.0, min(1.0, progress))
-                        let monotonic = max(self.downloadProgress ?? 0.0, clamped)
-                        self.downloadProgress = monotonic
-                        externalProgressHandler?(monotonic)
-                        if clamped >= 1.0 {
-                            self.isDownloadingModel = false
-                            self.isLoadingModel = true
-                            self.downloadProgress = nil
-                        }
+                        self.applyModelPreparationProgress(
+                            progress,
+                            updatesActiveModelState: true,
+                            externalProgressHandler: externalProgressHandler
+                        )
                     }
                 }
             )
@@ -2809,9 +2834,11 @@ final class ASRService: ObservableObject {
             // Keep isLoadingModel true until first transcription completes (for large models that need warm-up)
             if !self.hasCompletedFirstTranscription {
                 self.isLoadingModel = true
+                self.modelPreparationPhase = .loading
                 DebugLogger.shared.info("⏳ Model loaded, waiting for first transcription to complete...", source: "ASRService")
             } else {
                 self.isLoadingModel = false
+                self.modelPreparationPhase = nil
             }
             self.downloadProgress = nil
             self.modelsExistOnDisk = true
@@ -2841,6 +2868,7 @@ final class ASRService: ObservableObject {
                 self.isDownloadingModel = false
                 self.isLoadingModel = false
                 self.downloadProgress = nil
+                self.modelPreparationPhase = nil
                 self.modelsExistOnDisk = provider.modelsExistOnDisk()
                 self.isCancellingModelPreparation = false
             }
@@ -2856,6 +2884,7 @@ final class ASRService: ObservableObject {
                     self.isDownloadingModel = false
                     self.isLoadingModel = false
                     self.downloadProgress = nil
+                    self.modelPreparationPhase = nil
                     self.modelsExistOnDisk = provider.modelsExistOnDisk()
                     self.isCancellingModelPreparation = false
                 }
@@ -2867,15 +2896,54 @@ final class ASRService: ObservableObject {
                 self.isDownloadingModel = false
                 self.isLoadingModel = false
                 self.downloadProgress = nil
+                self.modelPreparationPhase = nil
             }
             throw error
         }
     }
 
+    private func applyModelPreparationProgress(
+        _ progress: ModelPreparationProgress,
+        updatesActiveModelState: Bool,
+        externalProgressHandler: ((Double) -> Void)?
+    ) {
+        switch progress.phase {
+        case .preparingDownload:
+            self.downloadProgress = nil
+            if updatesActiveModelState {
+                self.isDownloadingModel = true
+                self.isLoadingModel = false
+            }
+        case .downloading:
+            self.downloadProgress = progress.fractionCompleted
+            if updatesActiveModelState {
+                self.isDownloadingModel = true
+                self.isLoadingModel = false
+            }
+            if let fraction = progress.fractionCompleted {
+                externalProgressHandler?(fraction)
+            }
+        case .optimizing:
+            self.downloadProgress = nil
+            if updatesActiveModelState {
+                self.isDownloadingModel = true
+                self.isLoadingModel = false
+            }
+        case .loading:
+            self.downloadProgress = nil
+            if updatesActiveModelState {
+                self.isDownloadingModel = false
+                self.isLoadingModel = true
+            }
+        }
+
+        self.modelPreparationPhase = progress.phase
+    }
+
     private func prepareProviderWithRecovery(
         provider: TranscriptionProvider,
         modelsAlreadyCached: Bool,
-        progressHandler: @escaping (Double) -> Void
+        progressHandler: @escaping (ModelPreparationProgress) -> Void
     ) async throws {
         let start = Date()
         var firstError: Error?
@@ -3147,6 +3215,7 @@ final class ASRService: ObservableObject {
                 self.hasCompletedFirstTranscription = true
                 DispatchQueue.main.async {
                     self.isLoadingModel = false
+                    self.modelPreparationPhase = nil
                     DebugLogger.shared.info("✅ Model warmed up - first streaming transcription completed", source: "ASRService")
                 }
             }

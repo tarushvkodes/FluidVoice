@@ -32,7 +32,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.configureWordBoosting = configureWordBoosting
     }
 
-    func prepare(progressHandler: ((Double) -> Void)? = nil) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
@@ -55,15 +55,17 @@ final class FluidAudioProvider: TranscriptionProvider {
             try FileManager.default.removeItem(at: modelCacheDirectory)
         }
         let progressRelay = ModelPreparationProgressRelay(progressHandler)
-        progressRelay.report(0.0)
+        progressRelay.report(.preparingDownload)
         let fluidAudioProgressHandler: DownloadUtils.ProgressHandler = { progress in
             switch progress.phase {
             case .listing:
-                progressRelay.report(0.0)
+                progressRelay.report(.preparingDownload)
             case .downloading:
-                progressRelay.report(max(0.0, min(1.0, progress.fractionCompleted * 2.0)))
+                // FluidAudio reserves 0.0-0.5 for transfer bytes. Show percent only for that
+                // real download phase, not for later Core ML work.
+                progressRelay.report(.downloading(progress.fractionCompleted / 0.5))
             case .compiling:
-                progressRelay.report(1.0)
+                progressRelay.report(.optimizing)
             }
         }
 
@@ -151,7 +153,7 @@ final class FluidAudioProvider: TranscriptionProvider {
 
         try Task.checkCancellation()
         self.isReady = true
-        progressRelay.report(1.0)
+        progressRelay.report(.loading)
         DebugLogger.shared.info(
             "FluidAudioProvider: Models ready [isWordBoostingActive=\(self.isWordBoostingActive), terms=\(self.boostedVocabularyTermsCount)]",
             source: "FluidAudioProvider"
@@ -366,7 +368,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         // Intel stub - parameter ignored
     }
 
-    func prepare(progressHandler: ((Double) -> Void)?) async throws {
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
         throw NSError(
             domain: "FluidAudioProvider",
             code: -1,
