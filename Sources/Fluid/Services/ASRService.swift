@@ -3229,18 +3229,30 @@ final class ASRService: ObservableObject {
     }
 
     func typeTextToActiveField(_ text: String, preferredTargetPID: pid_t?, textReadyAt: TimeInterval? = nil) {
+        self.typeOutputPlanToActiveField(.plain(text), preferredTargetPID: preferredTargetPID, textReadyAt: textReadyAt)
+    }
+
+    func typeOutputPlanToActiveField(
+        _ plan: DictationLiteralOutputPlan,
+        preferredTargetPID: pid_t?,
+        textReadyAt: TimeInterval? = nil
+    ) {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let textReadyAge = textReadyAt.map { Int(((requestedAt - $0) * 1000).rounded()) }
+        let text = plan.plainText
         DebugLogger.shared.benchmark(
             "TYPING_BENCH",
             message: "asr_type_request chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyAgeMs=\(textReadyAge.map { String($0) } ?? "nil")",
             source: "TypingBenchmark"
         )
-        self.typingService.typeTextInstantly(text, preferredTargetPID: preferredTargetPID, textReadyAt: textReadyAt)
+        self.typingService.typeOutputPlanInstantly(plan, preferredTargetPID: preferredTargetPID, textReadyAt: textReadyAt)
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
+        let textReadyToDispatchMs = textReadyAt.map {
+            String(Int(((dispatchedAt - $0) * 1000).rounded()))
+        } ?? "nil"
         DebugLogger.shared.benchmark(
             "TYPING_BENCH",
-            message: "asr_type_dispatched chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyToDispatchMs=\(textReadyAt.map { String(Int(((dispatchedAt - $0) * 1000).rounded())) } ?? "nil")",
+            message: "asr_type_dispatched chars=\(text.count) preferredPID=\(preferredTargetPID.map { String($0) } ?? "nil") textReadyToDispatchMs=\(textReadyToDispatchMs)",
             source: "TypingBenchmark"
         )
     }

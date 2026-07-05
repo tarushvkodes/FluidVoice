@@ -261,6 +261,194 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testSlashCommandFormattingNormalizesSpokenAndLiteralCommands() {
+        XCTAssertEqual(
+            ASRService.applySlashCommandFormatting("Run slash status and then / model."),
+            "Run /status and then /model."
+        )
+        XCTAssertEqual(
+            ASRService.applySlashCommandFormatting("Type forward slash fix-ci."),
+            "Type /fix-ci."
+        )
+        XCTAssertEqual(
+            ASRService.applySlashCommandFormatting("slash compact"),
+            "/compact"
+        )
+    }
+
+    func testSlashCommandFormattingLeavesNonCommandSlashUsageAlone() {
+        let text = "Use 1/2 and and/or. Open src slash services. Go to https slash slash example dot com. Slash and burn."
+
+        XCTAssertEqual(
+            ASRService.applySlashCommandFormatting(text),
+            text
+        )
+    }
+
+    func testMentionFormattingExplicitPhrasesWorkWithoutAppContext() {
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting("tag Paul"),
+            "@Paul"
+        )
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting("mention Paul Heinz, please"),
+            "@Paul Heinz, please"
+        )
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting("at sign maxgaav"),
+            "@maxgaav"
+        )
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting("at the rate Sarah"),
+            "@Sarah"
+        )
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting("mention Paul please"),
+            "@Paul please"
+        )
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting("tag Paul tomorrow"),
+            "@Paul tomorrow"
+        )
+    }
+
+    func testMentionFormattingRelaxedAtNameRequiresMentionAppContext() {
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting(
+                "at Paul can you check this",
+                appName: "Slack",
+                bundleID: "com.tinyspeck.slackmacgap"
+            ),
+            "@Paul can you check this"
+        )
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting(
+                "hey at Paul Heinz can you check this",
+                appName: "Discord",
+                bundleID: "com.hnc.Discord"
+            ),
+            "hey @Paul Heinz can you check this"
+        )
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting("at Paul can you check this", appName: "Notes", bundleID: "com.apple.Notes"),
+            "at Paul can you check this"
+        )
+    }
+
+    func testMentionFormattingLeavesProseAlone() {
+        let text = "I am at the store. Meet me at lunch. I am at Paul. Look at Paul's message."
+
+        XCTAssertEqual(
+            ASRService.applyMentionFormatting(text, appName: "Slack", bundleID: "com.tinyspeck.slackmacgap"),
+            text
+        )
+    }
+
+    func testMentionOutputPlanDoesNotAutoConfirmAutocomplete() {
+        let plan = ASRService.makeDictationLiteralOutputPlan(
+            for: "@Paul can you check this",
+            appName: "Slack",
+            bundleID: "com.tinyspeck.slackmacgap"
+        )
+
+        XCTAssertEqual(plan.steps, [.text("@Paul can you check this")])
+        XCTAssertEqual(plan.plainText, "@Paul can you check this")
+    }
+
+    func testMentionOutputPlanStaysPlainOutsideMentionApps() {
+        let text = "@Paul can you check this"
+
+        XCTAssertEqual(
+            ASRService.makeDictationLiteralOutputPlan(
+                for: text,
+                appName: "Notes",
+                bundleID: "com.apple.Notes"
+            ).steps,
+            [.text(text)]
+        )
+    }
+
+    func testTerminalLiteralAutocompleteSpacingRemovesTrailingSpaceForTargetApps() {
+        XCTAssertEqual(
+            ASRService.applyTerminalLiteralAutocompleteSpacing(
+                "/model ",
+                appName: "Codex",
+                bundleID: "com.openai.codex"
+            ),
+            "/model"
+        )
+        XCTAssertEqual(
+            ASRService.applyTerminalLiteralAutocompleteSpacing(
+                "hey @Paul Heinz ",
+                appName: "Slack",
+                bundleID: "com.tinyspeck.slackmacgap"
+            ),
+            "hey @Paul Heinz"
+        )
+        XCTAssertEqual(
+            ASRService.applyTerminalLiteralAutocompleteSpacing(
+                " @Paul ",
+                appName: "Slack",
+                bundleID: "com.tinyspeck.slackmacgap"
+            ),
+            " @Paul"
+        )
+        XCTAssertEqual(
+            ASRService.makeDictationLiteralOutputPlan(
+                for: "@ross.winn ",
+                appName: "Discord",
+                bundleID: "com.hnc.Discord"
+            ).plainText,
+            "@ross.winn"
+        )
+    }
+
+    func testTerminalLiteralAutocompleteSpacingLeavesNonAutocompleteTextAlone() {
+        XCTAssertEqual(
+            ASRService.applyTerminalLiteralAutocompleteSpacing(
+                "/model ",
+                appName: "Notes",
+                bundleID: "com.apple.Notes"
+            ),
+            "/model "
+        )
+        XCTAssertEqual(
+            ASRService.applyTerminalLiteralAutocompleteSpacing(
+                "Run /status please ",
+                appName: "Codex",
+                bundleID: "com.openai.codex"
+            ),
+            "Run /status please "
+        )
+        XCTAssertEqual(
+            ASRService.applyTerminalLiteralAutocompleteSpacing(
+                "@Paul can you check this ",
+                appName: "Slack",
+                bundleID: "com.tinyspeck.slackmacgap"
+            ),
+            "@Paul can you check this "
+        )
+    }
+
+    func testSlashCommandOutputPlanDoesNotAutoConfirmAutocomplete() {
+        XCTAssertEqual(
+            ASRService.makeDictationLiteralOutputPlan(
+                for: "/goal update the plan",
+                appName: "Codex",
+                bundleID: "com.openai.codex"
+            ).steps,
+            [.text("/goal update the plan")]
+        )
+        XCTAssertEqual(
+            ASRService.makeDictationLiteralOutputPlan(
+                for: "Run /status please",
+                appName: "Codex",
+                bundleID: "com.openai.codex"
+            ).steps,
+            [.text("Run /status please")]
+        )
+    }
+
     func testDictionaryTrainingNormalizesSamplesAndIgnoresIntendedText() {
         let triggers = CustomDictionaryTrainingMerge.normalizedTriggers(
             from: [" Fluid Voice. ", "FluidVoice", "fluid voice", " "],
