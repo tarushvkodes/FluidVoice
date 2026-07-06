@@ -33,6 +33,7 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
     var automaticPressWasTargetActive: [HotkeyHoldModeType: Bool] = [:]
     var automaticPressStartedTypes: Set<HotkeyHoldModeType> = []
     var activePrimaryShortcutPress: ActivePrimaryShortcutPress?
+    var consumedRightOptionTextInputKeyCodes: Set<UInt16> = []
 
     func withLock<T>(_ block: () -> T) -> T {
         self.lock.lock()
@@ -43,6 +44,15 @@ private final nonisolated class HotkeyState: @unchecked Sendable {
 
 @MainActor
 final class GlobalHotkeyManager: NSObject {
+    private static let rightOptionKeyCode: UInt16 = 61
+    private static let textInputKeyCodes: Set<UInt16> = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+        30, 31, 32, 33, 34, 35, 37, 38, 39, 40,
+        41, 42, 43, 44, 45, 46, 47, 49, 50,
+    ]
+
     private nonisolated(unsafe) var state = HotkeyState()
     private nonisolated(unsafe) var eventTap: CFMachPort?
     private nonisolated(unsafe) var runLoopSource: CFRunLoopSource?
@@ -523,6 +533,23 @@ final class GlobalHotkeyManager: NSObject {
         task?.cancel()
     }
 
+    private func isRightOptionPhysicallyActive() -> Bool {
+        self.pressedModifierKeyCodes.contains(Self.rightOptionKeyCode) ||
+            CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(Self.rightOptionKeyCode))
+    }
+
+    private func consumeRightOptionTextInputKey(_ keyCode: UInt16) {
+        _ = self.state.withLock {
+            self.state.consumedRightOptionTextInputKeyCodes.insert(keyCode)
+        }
+    }
+
+    private func finishConsumedRightOptionTextInputKey(_ keyCode: UInt16) -> Bool {
+        self.state.withLock {
+            self.state.consumedRightOptionTextInputKeyCodes.remove(keyCode) != nil
+        }
+    }
+
     private func markOtherInputDuringModifierOnly() {
         guard self.modifierOnlyKeyDown else { return }
         self.otherKeyPressedDuringModifier = true
@@ -587,6 +614,105 @@ final class GlobalHotkeyManager: NSObject {
         )
     }
 
+    private func activeModifierOnlyShortcuts(for type: HotkeyHoldModeType) -> [HotkeyShortcut] {
+        switch type {
+        case .transcription:
+            return self.primaryShortcuts
+        case .promptMode:
+            return [self.promptModeShortcut]
+        case .commandMode:
+            return self.commandModeShortcut.map { [$0] } ?? []
+        case .rewriteMode:
+            return [self.rewriteModeShortcut]
+        case .promptAssignment:
+            return self.promptShortcutAssignments.map(\.shortcut)
+        }
+    }
+
+    private func shouldSuppressRightOptionTextInputDuringModifierOnlyHold(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard modifiers.contains(.option),
+              Self.textInputKeyCodes.contains(keyCode),
+              self.modifierOnlyKeyDown,
+              self.pressedModifierKeyCodes.contains(Self.rightOptionKeyCode),
+              let activeType = self.activeModifierOnlyType
+        else {
+            return false
+        }
+
+        return self.activeModifierOnlyShortcuts(for: activeType).contains { shortcut in
+            shortcut.isModifierOnlyShortcut &&
+                shortcut.normalizedModifierKeyCodes.contains(Self.rightOptionKeyCode)
+        }
+    }
+
+    private func shouldPrioritizeRightOptionRewriteShortcut(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard self.rewriteModeShortcutEnabled,
+              self.isRightOptionPhysicallyActive(),
+              Self.textInputKeyCodes.contains(keyCode),
+              self.rewriteModeShortcut.matches(keyCode: keyCode, modifiers: modifiers),
+              self.rewriteModeShortcut.relevantModifierFlags == [.option]
+        else {
+            return false
+        }
+
+        return self.primaryShortcuts.contains { shortcut in
+            shortcut.isModifierOnlyShortcut &&
+                shortcut.normalizedModifierKeyCodes.contains(Self.rightOptionKeyCode)
+        }
+    }
+
+    private func handleRewriteModeKeyDown() {
+        switch self.hotkeyMode {
+        case .hold:
+            if !self.isRewriteKeyPressed {
+                self.cancelPendingReleaseStop(for: .rewriteMode)
+                self.clearHoldModeStartTriggered(for: .rewriteMode)
+                self.isRewriteKeyPressed = true
+                DebugLogger.shared.info("Rewrite mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
+                self.triggerRewriteMode()
+                self.markHoldModeStartTriggered(for: .rewriteMode)
+            }
+        case .automatic:
+            if !self.isRewriteKeyPressed {
+                self.isRewriteKeyPressed = true
+                let isSameMode = self.asrService.isRunning && (self.isRewriteRecordingProvider?() ?? false)
+                self.beginAutomaticPress(for: .rewriteMode, wasTargetActive: isSameMode)
+                if self.asrService.isRunning {
+                    if isSameMode {
+                        DebugLogger.shared.info("Rewrite mode shortcut pressed (automatic, same mode) - waiting for release", source: "GlobalHotkeyManager")
+                    } else {
+                        DebugLogger.shared.info("Rewrite mode shortcut pressed (automatic, switch mode)", source: "GlobalHotkeyManager")
+                        self.triggerRewriteMode()
+                        self.markAutomaticPressStarted(for: .rewriteMode)
+                    }
+                } else {
+                    DebugLogger.shared.info("Rewrite mode shortcut triggered (automatic) - starting", source: "GlobalHotkeyManager")
+                    self.triggerRewriteMode()
+                    self.markAutomaticPressStarted(for: .rewriteMode)
+                }
+            }
+        case .toggle:
+            if self.asrService.isRunning {
+                if self.isRewriteRecordingProvider?() ?? false {
+                    DebugLogger.shared.info("Rewrite mode shortcut pressed in Edit mode - stopping", source: "GlobalHotkeyManager")
+                    self.stopRecordingIfNeeded()
+                } else {
+                    DebugLogger.shared.info("Rewrite mode shortcut pressed while recording - switching mode", source: "GlobalHotkeyManager")
+                    self.triggerRewriteMode()
+                }
+            } else {
+                DebugLogger.shared.info("Rewrite mode shortcut triggered - starting", source: "GlobalHotkeyManager")
+                self.triggerRewriteMode()
+            }
+        }
+    }
+
     private func handleKeyEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if let tapRecoveryResult = self.handleTapDisableEvent(type: type, event: event) {
             return tapRecoveryResult
@@ -609,6 +735,28 @@ final class GlobalHotkeyManager: NSObject {
 
         switch type {
         case .keyDown:
+            if self.shouldPrioritizeRightOptionRewriteShortcut(keyCode: keyCode, modifiers: eventModifiers) {
+                self.consumeRightOptionTextInputKey(keyCode)
+                DebugLogger.shared.info(
+                    "Right Option edit shortcut consumed before text input",
+                    source: "GlobalHotkeyManager"
+                )
+                self.handleRewriteModeKeyDown()
+                return nil
+            }
+
+            if self.shouldSuppressRightOptionTextInputDuringModifierOnlyHold(
+                keyCode: keyCode,
+                modifiers: eventModifiers
+            ) {
+                self.consumeRightOptionTextInputKey(keyCode)
+                DebugLogger.shared.info(
+                    "Suppressing Right Option text input during active FluidVoice modifier shortcut",
+                    source: "GlobalHotkeyManager"
+                )
+                return nil
+            }
+
             self.markOtherInputDuringModifierOnly()
 
             // Observe post-transcription edits (do not consume the event).
@@ -757,51 +905,7 @@ final class GlobalHotkeyManager: NSObject {
             // Check dedicated rewrite mode hotkey
             if self.rewriteModeShortcutEnabled {
                 if self.rewriteModeShortcut.matches(keyCode: keyCode, modifiers: eventModifiers) {
-                    switch self.hotkeyMode {
-                    case .hold:
-                        // Press and hold: start on keyDown, stop on keyUp
-                        if !self.isRewriteKeyPressed {
-                            self.cancelPendingReleaseStop(for: .rewriteMode)
-                            self.clearHoldModeStartTriggered(for: .rewriteMode)
-                            self.isRewriteKeyPressed = true
-                            DebugLogger.shared.info("Rewrite mode shortcut pressed (hold mode) - starting", source: "GlobalHotkeyManager")
-                            self.triggerRewriteMode()
-                            self.markHoldModeStartTriggered(for: .rewriteMode)
-                        }
-                    case .automatic:
-                        if !self.isRewriteKeyPressed {
-                            self.isRewriteKeyPressed = true
-                            let isSameMode = self.asrService.isRunning && (self.isRewriteRecordingProvider?() ?? false)
-                            self.beginAutomaticPress(for: .rewriteMode, wasTargetActive: isSameMode)
-                            if self.asrService.isRunning {
-                                if isSameMode {
-                                    DebugLogger.shared.info("Rewrite mode shortcut pressed (automatic, same mode) - waiting for release", source: "GlobalHotkeyManager")
-                                } else {
-                                    DebugLogger.shared.info("Rewrite mode shortcut pressed (automatic, switch mode)", source: "GlobalHotkeyManager")
-                                    self.triggerRewriteMode()
-                                    self.markAutomaticPressStarted(for: .rewriteMode)
-                                }
-                            } else {
-                                DebugLogger.shared.info("Rewrite mode shortcut triggered (automatic) - starting", source: "GlobalHotkeyManager")
-                                self.triggerRewriteMode()
-                                self.markAutomaticPressStarted(for: .rewriteMode)
-                            }
-                        }
-                    case .toggle:
-                        // Toggle mode: press to start, press again to stop
-                        if self.asrService.isRunning {
-                            if self.isRewriteRecordingProvider?() ?? false {
-                                DebugLogger.shared.info("Rewrite mode shortcut pressed in Edit mode - stopping", source: "GlobalHotkeyManager")
-                                self.stopRecordingIfNeeded()
-                            } else {
-                                DebugLogger.shared.info("Rewrite mode shortcut pressed while recording - switching mode", source: "GlobalHotkeyManager")
-                                self.triggerRewriteMode()
-                            }
-                        } else {
-                            DebugLogger.shared.info("Rewrite mode shortcut triggered - starting", source: "GlobalHotkeyManager")
-                            self.triggerRewriteMode()
-                        }
-                    }
+                    self.handleRewriteModeKeyDown()
                     return nil
                 }
             }
@@ -814,6 +918,10 @@ final class GlobalHotkeyManager: NSObject {
             }
 
         case .keyUp:
+            if self.finishConsumedRightOptionTextInputKey(keyCode) {
+                return nil
+            }
+
             // Prompt mode key up (press and hold mode)
             if self.handlePromptModeKeyUp(keyCode: keyCode) { return nil }
 
