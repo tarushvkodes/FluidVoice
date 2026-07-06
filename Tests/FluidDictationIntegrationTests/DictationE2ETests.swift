@@ -722,18 +722,10 @@ final class DictationE2ETests: XCTestCase {
 
     func testDictationEndToEnd_whisperTiny_transcribesFixture() async throws {
         // Arrange
-        // App-hosted test writes to the real host UserDefaults; restore the prior
-        // selection so the next app launch doesn't silently come up on Whisper Tiny.
-        let priorSpeechModel = SettingsStore.shared.selectedSpeechModel
-        defer { SettingsStore.shared.selectedSpeechModel = priorSpeechModel }
-
-        SettingsStore.shared.shareAnonymousAnalytics = false
-        SettingsStore.shared.selectedSpeechModel = .whisperTiny
-
         let modelDirectory = Self.modelDirectoryForRun()
         try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
 
-        let provider = WhisperProvider(modelDirectory: modelDirectory)
+        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny)
 
         // Act
         try await provider.prepare()
