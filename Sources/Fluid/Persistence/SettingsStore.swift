@@ -2751,7 +2751,7 @@ final class SettingsStore: ObservableObject {
     var rewriteModeShortcutEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.rewriteModeShortcutEnabled)
-            return value as? Bool ?? true
+            return value as? Bool ?? false
         }
         set {
             objectWillChange.send()
