@@ -39,7 +39,7 @@ final class SettingsStore: ObservableObject {
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
         self.normalizeProviderSelectionForCurrentVerificationState()
-        self.enforceOnboardingGenerationIfNeeded()
+        self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
@@ -2161,27 +2161,6 @@ final class SettingsStore: ObservableObject {
         set { self.defaults.set(newValue, forKey: Keys.playgroundUsed) }
     }
 
-    /// Bump this when shipping a version that should force all users (new + existing) through
-    /// onboarding again. The user's stored generation is compared on init; if it's below this
-    /// value, onboarding is reset. Each forced ship increments this by 1.
-    private static let currentOnboardingGeneration: Int = 2
-
-    /// Force onboarding reset for users whose stored generation is below the current one.
-    /// Called during init() so it takes effect before any UI decision.
-    private func enforceOnboardingGenerationIfNeeded() {
-        let storedGeneration = self.defaults.integer(forKey: Keys.onboardingGeneration)
-        guard storedGeneration < Self.currentOnboardingGeneration else { return }
-
-        // Reset onboarding state and bump the stored generation so this is a one-time reset.
-        objectWillChange.send()
-        self.defaults.set(false, forKey: Keys.onboardingCompleted)
-        self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-        self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-        self.defaults.set(Self.currentOnboardingGeneration, forKey: Keys.onboardingGeneration)
-    }
-
     var onboardingCompleted: Bool {
         get {
             if self.defaults.object(forKey: Keys.onboardingCompleted) == nil {
@@ -2193,7 +2172,7 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.onboardingCompleted)
             if newValue {
-                self.defaults.set(Self.currentOnboardingGeneration, forKey: Keys.onboardingGeneration)
+                self.defaults.set(false, forKey: Keys.manualOnboardingResetRequested)
             }
         }
     }
@@ -2308,13 +2287,30 @@ final class SettingsStore: ObservableObject {
     func resetOnboardingProgress() {
         objectWillChange.send()
         self.defaults.set(false, forKey: Keys.onboardingCompleted)
-        self.defaults.set(Self.currentOnboardingGeneration, forKey: Keys.onboardingGeneration)
+        self.defaults.set(true, forKey: Keys.manualOnboardingResetRequested)
         self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
         self.defaults.set(false, forKey: Keys.onboardingAISkipped)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
         self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
         self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
         self.defaults.set(false, forKey: Keys.playgroundUsed)
+    }
+
+    private func repairForcedOnboardingResetIfNeeded() {
+        // 1.6.2 briefly used OnboardingGeneration to force every install through onboarding.
+        // Restore existing users who were reset by that migration while keeping fresh installs intact.
+        guard self.defaults.object(forKey: Keys.onboardingGeneration) != nil,
+              self.defaults.bool(forKey: Keys.onboardingCompleted) == false,
+              self.defaults.bool(forKey: Keys.manualOnboardingResetRequested) == false,
+              self.hasLegacyUsageSignals()
+        else { return }
+
+        objectWillChange.send()
+        self.defaults.set(true, forKey: Keys.onboardingCompleted)
+        self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
+        self.defaults.set(false, forKey: Keys.onboardingAISkipped)
+        self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
+        self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
     }
 
     private func hasLegacyUsageSignals() -> Bool {
@@ -4478,6 +4474,7 @@ private extension SettingsStore {
         static let playgroundUsed = "PlaygroundUsed"
         static let onboardingCompleted = "OnboardingCompleted"
         static let onboardingGeneration = "OnboardingGeneration"
+        static let manualOnboardingResetRequested = "ManualOnboardingResetRequested"
         static let onboardingCurrentStep = "OnboardingCurrentStep"
         static let onboardingAISkipped = "OnboardingAISkipped"
         static let onboardingPlaygroundValidated = "OnboardingPlaygroundValidated"
