@@ -548,6 +548,10 @@ private enum SpokenPunctuationFormatter {
         ["+", "=", "%", "-", "—", "–", "/", "\\", "@", "#", "$", "&", "*", "_", "|", "~", "^", "<", ">"]
     )
 
+    private static let punctuationPairCommaCleanupCharacters = Set<Character>(
+        ["+", "=", "%", "-", "—", "–", "/", "\\", "@", "#", "$", "&", "*", "_", "|", "~", "^", "<", ">", "(", ")", "[", "]", "{", "}", "\"", "'", "`", ".", "?", "!", ":", ";"]
+    )
+
     private static func cleanSymbolCommaNoise(in text: String) -> String {
         guard text.contains(",") else { return text }
 
@@ -577,8 +581,11 @@ private enum SpokenPunctuationFormatter {
     }
 
     private static func shouldRemoveComma(previous: Character?, next: Character?) -> Bool {
-        previous.map { self.symbolCommaCleanupCharacters.contains($0) } == true ||
+        let isNextToSymbol = previous.map { self.symbolCommaCleanupCharacters.contains($0) } == true ||
             next.map { self.symbolCommaCleanupCharacters.contains($0) } == true
+        let isBetweenPunctuationPair = previous.map { self.punctuationPairCommaCleanupCharacters.contains($0) } == true &&
+            next.map { self.punctuationPairCommaCleanupCharacters.contains($0) } == true
+        return isNextToSymbol || isBetweenPunctuationPair
     }
 
     private static func indexAfterSkippableComma(

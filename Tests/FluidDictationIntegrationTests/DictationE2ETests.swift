@@ -431,6 +431,18 @@ final class DictationE2ETests: XCTestCase {
                 ASRService.applySpokenPunctuationFormatting("50, %"),
                 "50%"
             )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("open bracket comma close bracket"),
+                "[]"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("open paren comma close paren"),
+                "()"
+            )
+            XCTAssertEqual(
+                ASRService.applySpokenPunctuationFormatting("question mark comma exclamation mark"),
+                "?!"
+            )
         }
     }
 
