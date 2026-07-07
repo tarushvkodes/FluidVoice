@@ -603,10 +603,17 @@ final class ASRService: ObservableObject {
         }
         self.audioCapturePipeline.clearPreroll()
 
-        let oldEngine = self.engineStorage
-        self.engineStorage = nil
-        if let oldEngine {
-            DispatchQueue.global(qos: .utility).async { _ = oldEngine }
+        // The final strong reference must be released off the main thread:
+        // -[AVAudioEngine dealloc] waits on the engine's internal serial queue,
+        // which can deadlock main against a concurrent configuration-change post
+        // (#542). Capturing a local in the async block is not enough — if the
+        // block finishes before this function returns, the local's release
+        // becomes the final one and dealloc lands back on main. The holder keeps
+        // the engine out of main-thread locals entirely.
+        if self.engineStorage != nil {
+            let retired = RetiredAudioEngineReference(self.engineStorage)
+            self.engineStorage = nil
+            DispatchQueue.global(qos: .utility).async { retired.drain() }
         }
         DebugLogger.shared.debug("Audio engine retired (\(reason))", source: "ASRService")
     }
@@ -2315,10 +2322,17 @@ final class ASRService: ObservableObject {
     private func registerEngineConfigurationChangeObserver() {
         guard self.engineConfigurationChangeObserver == nil else { return }
 
+        // queue: nil (synchronous delivery on the posting thread) is load-bearing:
+        // AVAudioEngine posts this notification from its internal serial queue, and
+        // NotificationCenter blocks a post until queued observers finish. With
+        // queue: .main that wait can never end when the main thread is itself
+        // blocked on the engine's queue (dealloc/stop during retirement) — a
+        // permanent deadlock (#542). The body only hops to the main actor, which
+        // is safe from any thread.
         self.engineConfigurationChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak self] notification in
             guard let changedEngine = notification.object as? AVAudioEngine else { return }
             Task { @MainActor [weak self, weak changedEngine] in
@@ -3549,6 +3563,25 @@ private extension ASRService {
     func stopStreamingTimer() {
         self.streamingTask?.cancel()
         self.streamingTask = nil
+    }
+}
+
+// MARK: - Audio engine retirement
+
+/// Carries the final strong reference to a retired audio engine so the release —
+/// and `-[AVAudioEngine dealloc]`, which blocks on the engine's internal serial
+/// queue — always happens on the drain queue, never on the main thread (#542).
+/// `@unchecked Sendable`: created on the main thread, then handed off and touched
+/// exactly once by the draining block; the dispatch provides the ordering.
+private final nonisolated class RetiredAudioEngineReference: @unchecked Sendable {
+    private var engine: AnyObject?
+
+    init(_ engine: AnyObject?) {
+        self.engine = engine
+    }
+
+    func drain() {
+        self.engine = nil
     }
 }
 
