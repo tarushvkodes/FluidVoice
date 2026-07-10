@@ -85,20 +85,22 @@ final class SettingsStore: ObservableObject {
 
         var displayName: String {
             switch self {
-            case .auto: return "Auto"
-            case .llama: return "llama.cpp"
-            case .mlx: return "MLX"
+            case .auto: return Self.systemDefault.displayName
+            case .llama: return "llama.cpp (Compatibility)"
+            case .mlx: return "MLX (Recommended)"
             }
         }
 
         var detail: String {
             switch self {
             case .auto:
-                return CPUArchitecture.isAppleSilicon ? "Uses MLX on Apple Silicon; errors if MLX is missing." : "Uses llama.cpp on Intel."
+                return Self.systemDefault.detail
             case .llama:
-                return "GGUF baseline; works on Intel and Apple Silicon."
+                return CPUArchitecture.isAppleSilicon
+                    ? "Optional and slower than MLX. Replaces MLX after verification."
+                    : "Recommended compatibility backend for Intel Macs."
             case .mlx:
-                return "Apple Silicon only; fastest local Fluid-1 path."
+                return "Recommended and faster than llama.cpp. Replaces it after verification."
             }
         }
     }
@@ -1501,8 +1503,11 @@ final class SettingsStore: ObservableObject {
             let rawValue = self.defaults.string(forKey: Keys.privateAIBackendPreference)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .lowercased()
-            let preference = rawValue.flatMap(PrivateAIBackendPreference.init(rawValue:))
+            var preference = rawValue.flatMap(PrivateAIBackendPreference.init(rawValue:))
                 ?? PrivateAIBackendPreference.systemDefault
+            if preference == .auto {
+                preference = PrivateAIBackendPreference.systemDefault
+            }
             if preference == .mlx, CPUArchitecture.isIntel {
                 return .llama
             }
@@ -1510,7 +1515,10 @@ final class SettingsStore: ObservableObject {
         }
         set {
             objectWillChange.send()
-            let preference = newValue == .mlx && CPUArchitecture.isIntel ? .llama : newValue
+            var preference = newValue == .auto ? PrivateAIBackendPreference.systemDefault : newValue
+            if preference == .mlx, CPUArchitecture.isIntel {
+                preference = .llama
+            }
             self.defaults.set(preference.rawValue, forKey: Keys.privateAIBackendPreference)
         }
     }

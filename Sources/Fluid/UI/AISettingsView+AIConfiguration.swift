@@ -728,8 +728,12 @@ extension AIEnhancementSettingsView {
                                     .controlSize(.mini)
                                     .fixedSize()
                             }
-                            Text(isDownloading ? Self.downloadButtonText(progress: downloadProgress) : "Download & Verify")
-                                .font(.system(size: 11, weight: .semibold))
+                            Text(
+                                isDownloading
+                                    ? Self.downloadButtonText(progress: downloadProgress)
+                                    : "Download \(self.privateAIBackendShortName) & Verify"
+                            )
+                            .font(.system(size: 11, weight: .semibold))
                         }
                     }
                     .fluidButton(.accent, size: .small)
@@ -786,7 +790,7 @@ extension AIEnhancementSettingsView {
                 .frame(width: 124, alignment: .leading)
 
             self.privateAIBackendPicker(isBusy: isBusy)
-                .frame(width: 140)
+                .frame(width: 190)
 
             Text(self.settings.privateAIBackendPreference.detail)
                 .font(.caption2)
@@ -810,7 +814,18 @@ extension AIEnhancementSettingsView {
     }
 
     private var privateAISelectableBackendPreferences: [SettingsStore.PrivateAIBackendPreference] {
-        CPUArchitecture.isIntel ? [.auto, .llama] : SettingsStore.PrivateAIBackendPreference.allCases
+        CPUArchitecture.isIntel ? [.llama] : [.mlx, .llama]
+    }
+
+    private var privateAIBackendShortName: String {
+        switch self.settings.privateAIBackendPreference {
+        case .auto:
+            return SettingsStore.PrivateAIBackendPreference.systemDefault == .mlx ? "MLX" : "llama.cpp"
+        case .llama:
+            return "llama.cpp"
+        case .mlx:
+            return "MLX"
+        }
     }
 
     private func privateAIBoostRow(isBusy: Bool) -> some View {
@@ -1118,8 +1133,11 @@ extension AIEnhancementSettingsView {
         }
 
         if model.canDownload {
+            let size = model.artifact.byteCount.map {
+                " (\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)))"
+            } ?? ""
             return PrivateAIProviderModelStatus(
-                detail: "Model not downloaded.",
+                detail: "\(self.privateAIBackendShortName) model not downloaded\(size).",
                 color: self.theme.palette.accent
             )
         }
@@ -2088,7 +2106,7 @@ extension AIEnhancementSettingsView {
                     self.privateAISettingLabel("Backend", systemImage: "cpu")
 
                     self.privateAIBackendPicker(isBusy: isBusy)
-                        .frame(width: 160)
+                        .frame(width: 210)
 
                     Text(self.settings.privateAIBackendPreference.detail)
                         .font(.caption2)
