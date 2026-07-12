@@ -103,17 +103,6 @@ private enum SpokenPunctuationFormatter {
         }
     }
 
-    private static let rulesByFirstWord: [String: [PhraseRule]] = {
-        let rules = Self.makeRules()
-        let grouped = Dictionary(grouping: rules) { $0.words.first ?? "" }
-        return grouped.mapValues {
-            $0.sorted {
-                if $0.words.count != $1.words.count { return $0.words.count > $1.words.count }
-                return $0.words.joined(separator: " ").count > $1.words.joined(separator: " ").count
-            }
-        }
-    }()
-
     static func apply(
         _ text: String,
         prefix: String,
@@ -582,7 +571,12 @@ private enum SpokenPunctuationFormatter {
             }
             if matched,
                !rule.requiresSymbolContext ||
-               self.hasSymbolContext(in: tokens, startIndex: index, endIndex: cursor),
+               self.hasSymbolContext(
+                   in: tokens,
+                   startIndex: index,
+                   endIndex: cursor,
+                   rulesByFirstWord: rulesByFirstWord
+               ),
                !rule.requiresDotContext ||
                self.hasDotContext(in: tokens, startIndex: index, endIndex: cursor),
                !rule.requiresSlashPathContext ||
@@ -596,21 +590,27 @@ private enum SpokenPunctuationFormatter {
         return nil
     }
 
-    private static func hasSymbolContext(in tokens: [Token], startIndex: Int, endIndex: Int) -> Bool {
+    private static func hasSymbolContext(
+        in tokens: [Token],
+        startIndex: Int,
+        endIndex: Int,
+        rulesByFirstWord: [String: [PhraseRule]]
+    ) -> Bool {
         let previous = self.significantToken(before: startIndex, in: tokens)
         let next = self.significantToken(atOrAfter: endIndex, in: tokens)
 
         if let previous, let next {
-            return self.isSymbolContextToken(previous) || self.isSymbolContextToken(next) ||
+            return self.isSymbolContextToken(previous, rulesByFirstWord: rulesByFirstWord) ||
+                self.isSymbolContextToken(next, rulesByFirstWord: rulesByFirstWord) ||
                 (self.isShortSymbolOperand(previous) && self.isShortSymbolOperand(next))
         }
 
         if let previous {
-            return self.isSymbolContextToken(previous)
+            return self.isSymbolContextToken(previous, rulesByFirstWord: rulesByFirstWord)
         }
 
         if let next {
-            return self.isSymbolContextToken(next)
+            return self.isSymbolContextToken(next, rulesByFirstWord: rulesByFirstWord)
         }
 
         return false
@@ -716,10 +716,13 @@ private enum SpokenPunctuationFormatter {
         return nil
     }
 
-    private static func isSymbolContextToken(_ token: Token) -> Bool {
+    private static func isSymbolContextToken(
+        _ token: Token,
+        rulesByFirstWord: [String: [PhraseRule]]
+    ) -> Bool {
         switch token {
         case let .word(_, normalized):
-            return self.rulesByFirstWord[normalized]?.contains { $0.symbol != "," && $0.symbol != "." } == true
+            return rulesByFirstWord[normalized]?.contains { $0.symbol != "," && $0.symbol != "." } == true
         case let .text(text):
             return text.contains { self.symbolCommaCleanupCharacters.contains($0) }
         }

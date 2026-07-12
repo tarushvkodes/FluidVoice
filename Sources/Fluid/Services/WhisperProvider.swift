@@ -318,7 +318,6 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func modelsExistOnDisk() -> Bool {
-        try? FileManager.default.createDirectory(at: self.modelDirectory, withIntermediateDirectories: true)
         return self.isModelFileValid(at: self.modelURL, for: self.selectedModel)
     }
 

@@ -292,7 +292,7 @@ enum PrivateAIProviderFeature {
     }
 
     nonisolated static func verificationFingerprint(for modelID: String) -> String {
-        let backendPreference = UserDefaults.standard.string(forKey: "FluidIntelligenceBackendPreference")?
+        let backendPreference = UserDefaults.standard.string(forKey: SettingsStore.privateAIBackendPreferenceDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         let normalizedBackendPreference: String

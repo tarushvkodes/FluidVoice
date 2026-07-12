@@ -887,6 +887,15 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
+    func testWhisperProvider_readinessCheckDoesNotCreateMissingDirectory() {
+        let modelDirectory = Self.modelDirectoryForRun()
+        let provider = WhisperProvider(modelDirectory: modelDirectory, modelOverride: .whisperTiny)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: modelDirectory.path))
+        XCTAssertFalse(provider.modelsExistOnDisk())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: modelDirectory.path))
+    }
+
     func testWhisperProvider_ggufCacheReadinessDoesNotDeleteLegacyUntilExplicitClear() async throws {
         let modelDirectory = Self.modelDirectoryForRun()
         try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
