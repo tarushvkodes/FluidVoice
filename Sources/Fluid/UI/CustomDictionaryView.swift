@@ -65,6 +65,17 @@ struct CustomDictionaryView: View {
         self.trainingReplacement.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var activePronunciationMatching: Bool {
+        self.pronunciationMatchingEnabled && SettingsStore.shared.selectedSpeechModel.supportsPronunciationMatching
+    }
+
+    private var pronunciationMatchingBinding: Binding<Bool> {
+        Binding(
+            get: { self.activePronunciationMatching },
+            set: { self.pronunciationMatchingEnabled = $0 }
+        )
+    }
+
     private var trainingTargetReference: String {
         DictionaryTrainingCopy.target(for: self.normalizedTrainingReplacement)
     }
@@ -93,7 +104,7 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingFinalOutputIsReady: Bool {
-        if self.pronunciationMatchingEnabled {
+        if self.activePronunciationMatching {
             return !self.trainingAlreadyCorrectWithoutReplacement &&
                 self.trainingPronunciationEnrollments.count >= CustomDictionaryTrainingMerge.readyCoveredCount
         }
@@ -103,7 +114,7 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingAlreadyCorrectWithoutReplacement: Bool {
-        if self.pronunciationMatchingEnabled {
+        if self.activePronunciationMatching {
             return self.trainingVariants.isEmpty &&
                 !self.lastTrainingOutput.isEmpty &&
                 self.lastTrainingOutput.caseInsensitiveCompare(self.normalizedTrainingReplacement) == .orderedSame &&
@@ -117,7 +128,7 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingReadinessProgress: Int {
-        if self.pronunciationMatchingEnabled {
+        if self.activePronunciationMatching {
             return min(self.trainingPronunciationEnrollments.count, CustomDictionaryTrainingMerge.readyCoveredCount)
         }
         guard !self.trainingAlreadyCorrectWithoutReplacement else {
@@ -128,7 +139,7 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingOutputIsCovered: Bool {
-        if self.pronunciationMatchingEnabled {
+        if self.activePronunciationMatching {
             return !self.trainingPronunciationEnrollments.isEmpty
         }
         return self.lastTrainingOutputIsCovered
@@ -264,10 +275,17 @@ struct CustomDictionaryView: View {
                     self.entries[index] = updatedEntry
                     self.saveEntries()
                     Task {
-                        try? await PronunciationDictionaryStore.shared.updateLabel(
-                            dictionaryEntryID: updatedEntry.id,
-                            label: updatedEntry.replacement
-                        )
+                        if PronunciationProfileEditPolicy.shouldDiscardProfile(
+                            previousReplacement: entry.replacement,
+                            updatedReplacement: updatedEntry.replacement
+                        ) {
+                            try? await PronunciationDictionaryStore.shared.delete(dictionaryEntryID: updatedEntry.id)
+                        } else {
+                            try? await PronunciationDictionaryStore.shared.updateLabel(
+                                dictionaryEntryID: updatedEntry.id,
+                                label: updatedEntry.replacement
+                            )
+                        }
                     }
                 }
             }
@@ -277,6 +295,10 @@ struct CustomDictionaryView: View {
             self.loadBoostTerms()
             self.automaticDictionaryLearningEnabled = SettingsStore.shared.automaticDictionaryLearningEnabled
             self.pronunciationMatchingEnabled = SettingsStore.shared.pronunciationMatchingEnabled
+            if !SettingsStore.shared.selectedSpeechModel.supportsPronunciationMatching {
+                self.pronunciationMatchingEnabled = false
+                SettingsStore.shared.pronunciationMatchingEnabled = false
+            }
             self.punctuationAutoConvertEnabled = SettingsStore.shared.autoConvertPunctuationEnabled
         }
         .onReceive(NotificationCenter.default.publisher(for: .parakeetVocabularyDidChange)) { _ in
@@ -609,8 +631,9 @@ struct CustomDictionaryView: View {
 
     private var voiceMatchingSettingsRow: some View {
         VoiceMatchingSettingsRow(
-            isEnabled: self.$pronunciationMatchingEnabled,
+            isEnabled: self.pronunciationMatchingBinding,
             isDisabled: self.isTrainingRecording || self.isTrainingProcessing,
+            isAdvancedAvailable: SettingsStore.shared.selectedSpeechModel.supportsPronunciationMatching,
             onChange: self.handlePronunciationMatchingChange(enabled:)
         )
     }
@@ -626,7 +649,7 @@ struct CustomDictionaryView: View {
                     .foregroundStyle(self.theme.palette.accent)
             } else if self.trainingFinalOutputIsReady {
                 Label(
-                    self.pronunciationMatchingEnabled
+                    self.activePronunciationMatching
                         ? "Voice profile for \(self.trainingTargetReference) captured 3 times."
                         : "FluidVoice recognized \(self.trainingTargetReference) 3 times in a row.",
                     systemImage: "checkmark.circle.fill"
@@ -645,7 +668,7 @@ struct CustomDictionaryView: View {
                     )
                     self.trainingInstruction(
                         number: 3,
-                        text: self.pronunciationMatchingEnabled
+                        text: self.activePronunciationMatching
                             ? "Repeat 3 times to teach FluidVoice how your voice sounds."
                             : "Keep repeating it until the circle reaches 3/3."
                     )
@@ -704,7 +727,7 @@ struct CustomDictionaryView: View {
             target: self.trainingTargetReference,
             isAlreadyCorrect: self.trainingAlreadyCorrectWithoutReplacement,
             isReady: self.trainingFinalOutputIsReady,
-            usesVoiceMatching: self.pronunciationMatchingEnabled
+            usesVoiceMatching: self.activePronunciationMatching
         )
     }
 
@@ -1819,7 +1842,7 @@ struct CustomDictionaryView: View {
 
         let transcript = await self.asr.stop(forDictionaryTraining: true)
         self.isTrainingProcessing = false
-        if self.pronunciationMatchingEnabled,
+        if self.activePronunciationMatching,
            CustomDictionaryTrainingMerge.normalizedTrigger(transcript) != nil,
            let enrollment = self.asr.lastDictionaryTrainingResult?.pronunciationEnrollment
         {
@@ -1853,7 +1876,7 @@ struct CustomDictionaryView: View {
     }
 
     private func addTrainingVariant(from transcript: String) {
-        if self.pronunciationMatchingEnabled,
+        if self.activePronunciationMatching,
            self.asr.lastDictionaryTrainingResult?.pronunciationEnrollment == nil
         {
             self.trainingHasError = true
@@ -1938,7 +1961,7 @@ struct CustomDictionaryView: View {
             $0.replacement.caseInsensitiveCompare(replacementText) == .orderedSame
         }
         let enrollments = self.trainingPronunciationEnrollments
-        if self.pronunciationMatchingEnabled, let entry, let modelKey = enrollments.first?.modelKey {
+        if self.activePronunciationMatching, let entry, let modelKey = enrollments.first?.modelKey {
             do {
                 try await PronunciationDictionaryStore.shared.upsert(
                     dictionaryEntryID: entry.id,
@@ -2269,6 +2292,7 @@ private struct VoiceMatchingSettingsRow: View {
     @Binding var isEnabled: Bool
 
     let isDisabled: Bool
+    let isAdvancedAvailable: Bool
     let onChange: (Bool) -> Void
 
     @Environment(\.theme) private var theme
@@ -2292,6 +2316,11 @@ private struct VoiceMatchingSettingsRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 2)
+            } else if !self.isAdvancedAvailable {
+                Text("Advanced voice matching requires Parakeet TDT on Apple Silicon.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .padding(.horizontal, 2)
             }
         }
         .padding(self.theme.metrics.spacing.md)
@@ -2352,8 +2381,8 @@ private struct VoiceMatchingSettingsRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .buttonStyle(.plain)
-        .disabled(self.isDisabled)
-        .opacity(self.isDisabled ? 0.55 : 1)
+        .disabled(self.isDisabled || (enabledValue && !self.isAdvancedAvailable))
+        .opacity(self.isDisabled || (enabledValue && !self.isAdvancedAvailable) ? 0.55 : 1)
         .onHover { hovering in
             let update = { self.hoveredMethod = hovering ? enabledValue : nil }
             if self.reduceMotion {
@@ -2633,6 +2662,12 @@ enum CustomDictionaryManualEntry {
         }
 
         return self.normalizedTriggers(trimmed.split(separator: ",").map(String.init))
+    }
+}
+
+enum PronunciationProfileEditPolicy {
+    static func shouldDiscardProfile(previousReplacement: String, updatedReplacement: String) -> Bool {
+        previousReplacement.caseInsensitiveCompare(updatedReplacement) != .orderedSame
     }
 }
 

@@ -1328,8 +1328,8 @@ final class ASRService: ObservableObject {
 
         do {
             try self.startPreferredAudioCapture()
-            self.isRunning = true
             self.isDictionaryTrainingCaptureActive = forDictionaryTraining
+            self.isRunning = true
             DebugLogger.shared.info("✅ Audio capture running", source: "ASRService")
             onCaptureStarted?()
 

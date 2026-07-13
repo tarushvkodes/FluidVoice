@@ -858,6 +858,33 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testPronunciationProfileEditPolicyDiscardsProfileWhenMeaningChanges() {
+        XCTAssertTrue(
+            PronunciationProfileEditPolicy.shouldDiscardProfile(
+                previousReplacement: "Barath",
+                updatedReplacement: "FluidVoice"
+            )
+        )
+        XCTAssertFalse(
+            PronunciationProfileEditPolicy.shouldDiscardProfile(
+                previousReplacement: "Barath",
+                updatedReplacement: "BARATH"
+            )
+        )
+    }
+
+    func testPronunciationMatchingRequiresSupportedAppleSiliconModel() {
+        #if arch(arm64)
+        XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDT.supportsPronunciationMatching)
+        XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDTv2.supportsPronunciationMatching)
+        #else
+        XCTAssertFalse(SettingsStore.SpeechModel.parakeetTDT.supportsPronunciationMatching)
+        XCTAssertFalse(SettingsStore.SpeechModel.parakeetTDTv2.supportsPronunciationMatching)
+        #endif
+        XCTAssertFalse(SettingsStore.SpeechModel.whisperLargeTurbo.supportsPronunciationMatching)
+        XCTAssertFalse(SettingsStore.SpeechModel.cohereTranscribeSixBit.supportsPronunciationMatching)
+    }
+
     func testProgressiveDownloaderRetainsFileByMovingIt() throws {
         let source = FileManager.default.temporaryDirectory
             .appendingPathComponent("FluidVoiceDownloadSource-\(UUID().uuidString)")

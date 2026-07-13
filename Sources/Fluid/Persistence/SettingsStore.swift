@@ -4478,6 +4478,19 @@ final class SettingsStore: ObservableObject {
             }
         }
 
+        var supportsPronunciationMatching: Bool {
+            #if arch(arm64)
+            switch self {
+            case .parakeetTDT, .parakeetTDTv2:
+                return true
+            default:
+                return false
+            }
+            #else
+            return false
+            #endif
+        }
+
         /// Preview update cadence for real-time transcription.
         /// Models without native incremental decoding should use a slower interval.
         var streamingPreviewIntervalSeconds: Double {
