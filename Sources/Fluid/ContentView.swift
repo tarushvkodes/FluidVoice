@@ -3467,6 +3467,14 @@ struct ContentView: View {
         self.hotkeyManager?.setCancelCallback {
             var handled = false
 
+            // The suggestion panel is non-activating, so its Escape key arrives
+            // through the global event tap while the target app stays focused.
+            if DictionaryCorrectionOverlayController.shared.isPresented {
+                DebugLogger.shared.debug("Cancel callback: closing dictionary suggestion", source: "ContentView")
+                DictionaryCorrectionOverlayController.shared.dismiss()
+                return true
+            }
+
             // Close expanded command notch if visible (highest priority)
             if NotchOverlayManager.shared.isCommandOutputExpanded {
                 DebugLogger.shared.debug("Cancel callback: closing expanded command notch", source: "ContentView")
