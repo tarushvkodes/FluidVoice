@@ -945,8 +945,8 @@ final class DictationE2ETests: XCTestCase {
         ))
     }
 
-    func testAutomaticDictionarySuggestionRequiresRepeatedCorrection() {
-        let defaults = self.makeSuggestionPolicyDefaults()
+    func testAutomaticDictionarySuggestionRequiresRepeatedCorrection() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.globalCooldown = 0
         let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
@@ -957,8 +957,8 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(policy.shouldShow(candidate, now: now.addingTimeInterval(60)))
     }
 
-    func testAutomaticDictionarySuggestionPersistsDismissalCooldown() {
-        let defaults = self.makeSuggestionPolicyDefaults()
+    func testAutomaticDictionarySuggestionPersistsDismissalCooldown() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
         configuration.globalCooldown = 0
@@ -976,8 +976,8 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(restoredPolicy.shouldShow(candidate, now: now.addingTimeInterval(101)))
     }
 
-    func testAutomaticDictionarySuggestionAppliesGlobalCooldown() {
-        let defaults = self.makeSuggestionPolicyDefaults()
+    func testAutomaticDictionarySuggestionAppliesGlobalCooldown() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
         configuration.globalCooldown = 600
@@ -992,8 +992,8 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertTrue(policy.shouldShow(second, now: now.addingTimeInterval(601)))
     }
 
-    func testAutomaticDictionarySuggestionStopsAfterSessionIgnoreLimit() {
-        let defaults = self.makeSuggestionPolicyDefaults()
+    func testAutomaticDictionarySuggestionStopsAfterSessionIgnoreLimit() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
         configuration.globalCooldown = 0
@@ -1015,8 +1015,8 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(policy.shouldShow(next, now: now.addingTimeInterval(10)))
     }
 
-    func testAutomaticDictionarySuggestionNeverReturnsAfterAcceptance() {
-        let defaults = self.makeSuggestionPolicyDefaults()
+    func testAutomaticDictionarySuggestionNeverReturnsAfterAcceptance() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
         configuration.globalCooldown = 0
@@ -1029,8 +1029,8 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(policy.shouldShow(candidate, now: now.addingTimeInterval(10_000)))
     }
 
-    func testAutomaticDictionarySuggestionStopsAfterPairDismissalLimit() {
-        let defaults = self.makeSuggestionPolicyDefaults()
+    func testAutomaticDictionarySuggestionStopsAfterPairDismissalLimit() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
         var configuration = DictionarySuggestionPolicyConfig()
         configuration.requiredOccurrences = 1
         configuration.globalCooldown = 0
@@ -1048,9 +1048,9 @@ final class DictationE2ETests: XCTestCase {
         XCTAssertFalse(policy.shouldShow(candidate, now: now.addingTimeInterval(10)))
     }
 
-    private func makeSuggestionPolicyDefaults() -> UserDefaults {
+    private func makeSuggestionPolicyDefaults() throws -> UserDefaults {
         let suiteName = "AutomaticDictionarySuggestionPolicyTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
     }
