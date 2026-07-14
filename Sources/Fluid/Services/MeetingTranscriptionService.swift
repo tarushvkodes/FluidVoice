@@ -93,6 +93,8 @@ final class MeetingTranscriptionService: ObservableObject {
 
     /// Share the ASR service instance to avoid loading models twice
     private let asrService: ASRService
+    private var preparedProvider: TranscriptionProvider?
+    private var preparedProviderModel: SettingsStore.SpeechModel?
 
     init(asrService: ASRService) {
         self.asrService = asrService
@@ -138,18 +140,24 @@ final class MeetingTranscriptionService: ObservableObject {
         }
     }
 
-    /// Initialize the ASR models (reuses models from ASRService - no duplicate download!)
-    func initializeModels() async throws {
-        guard !self.asrService.isAsrReady else { return }
+    private func provider(for model: SettingsStore.SpeechModel) async throws -> TranscriptionProvider {
+        if self.preparedProviderModel != model {
+            self.preparedProvider = self.asrService.fileTranscriptionProvider(for: model)
+            self.preparedProviderModel = model
+        }
 
-        self.currentStatus = "Preparing ASR models..."
+        guard let provider = self.preparedProvider else {
+            throw TranscriptionError.modelLoadFailed("Could not create the selected transcription provider")
+        }
+        guard !provider.isReady else { return provider }
+
+        self.currentStatus = "Preparing \(model.displayName)..."
         self.progress = 0.1
 
         do {
-            try await self.asrService.ensureAsrReady()
-
-            self.currentStatus = "Models ready"
-            self.progress = 0.0
+            try await provider.prepare(progressHandler: nil)
+            self.currentStatus = "Model ready"
+            return provider
         } catch {
             throw TranscriptionError.modelLoadFailed(error.localizedDescription)
         }
@@ -158,7 +166,10 @@ final class MeetingTranscriptionService: ObservableObject {
     /// Transcribe an audio or video file
     /// - Parameters:
     ///   - fileURL: URL to the audio/video file
-    func transcribeFile(_ fileURL: URL) async throws -> TranscriptionResult {
+    func transcribeFile(
+        _ fileURL: URL,
+        model: SettingsStore.SpeechModel = .whisperLargeTurbo
+    ) async throws -> TranscriptionResult {
         self.isTranscribing = true
         error = nil
         self.progress = 0.0
@@ -170,16 +181,7 @@ final class MeetingTranscriptionService: ObservableObject {
         }
 
         do {
-            // Initialize models if not already done (reuses ASRService models)
-            if !self.asrService.isAsrReady {
-                try await self.initializeModels()
-            }
-
-            // Get the current transcription provider (works for both Parakeet and Whisper)
-            let provider = self.asrService.fileTranscriptionProvider
-            guard provider.isReady else {
-                throw TranscriptionError.modelLoadFailed("Transcription provider not ready")
-            }
+            let provider = try await self.provider(for: model)
 
             // Check file extension
             let fileExtension = fileURL.pathExtension.lowercased()

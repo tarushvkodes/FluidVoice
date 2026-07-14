@@ -6,6 +6,7 @@ struct MeetingTranscriptionView: View {
     @StateObject private var transcriptionService: MeetingTranscriptionService
     @ObservedObject private var fileHistoryStore = FileTranscriptionHistoryStore.shared
     @State private var selectedFileURL: URL?
+    @AppStorage("FileTranscriptionSpeechModel") private var selectedModelRawValue = SettingsStore.SpeechModel.whisperLargeTurbo.rawValue
     @Environment(\.theme) private var theme
 
     init(asrService: ASRService) {
@@ -125,8 +126,41 @@ struct MeetingTranscriptionView: View {
 
     // MARK: - File Selection Card
 
+    private var selectedModel: SettingsStore.SpeechModel {
+        SettingsStore.SpeechModel(rawValue: self.selectedModelRawValue) ?? .whisperLargeTurbo
+    }
+
+    private var availableFileModels: [SettingsStore.SpeechModel] {
+        SettingsStore.SpeechModel.availableModels
+    }
+
     private var fileSelectionCard: some View {
         VStack(spacing: 16) {
+            HStack(spacing: 12) {
+                Label("Transcription model", systemImage: "waveform.badge.magnifyingglass")
+                    .font(.subheadline.weight(.medium))
+
+                Spacer()
+
+                Picker("Transcription model", selection: self.$selectedModelRawValue) {
+                    ForEach(self.availableFileModels) { model in
+                        Text(model.displayName).tag(model.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 300)
+                .disabled(self.transcriptionService.isTranscribing)
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(self.theme.palette.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
+                    )
+            )
+
             if let fileURL = selectedFileURL {
                 // Show selected file
                 HStack {
@@ -569,7 +603,7 @@ struct MeetingTranscriptionView: View {
         guard let fileURL = selectedFileURL else { return }
 
         do {
-            _ = try await self.transcriptionService.transcribeFile(fileURL)
+            _ = try await self.transcriptionService.transcribeFile(fileURL, model: self.selectedModel)
         } catch {
             DebugLogger.shared.error("Transcription error: \(error)", source: "MeetingTranscriptionView")
         }

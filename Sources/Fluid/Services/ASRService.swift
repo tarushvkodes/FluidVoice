@@ -325,6 +325,15 @@ final class ASRService: ObservableObject {
         self.transcriptionProvider
     }
 
+    /// Returns a provider configured for file transcription without changing the
+    /// model used by global dictation.
+    func fileTranscriptionProvider(for model: SettingsStore.SpeechModel) -> TranscriptionProvider {
+        if model == SettingsStore.shared.selectedSpeechModel {
+            return self.transcriptionProvider
+        }
+        return self.getProvider(for: model)
+    }
+
     private func currentTranscriptionAnalyticsDimensions() -> (provider: String, model: String) {
         let selectedModel = SettingsStore.shared.selectedSpeechModel
         return (
