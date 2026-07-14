@@ -7,6 +7,7 @@ struct MeetingTranscriptionView: View {
     @ObservedObject private var fileHistoryStore = FileTranscriptionHistoryStore.shared
     @State private var selectedFileURL: URL?
     @AppStorage("FileTranscriptionSpeechModel") private var selectedModelRawValue = SettingsStore.SpeechModel.whisperLargeTurbo.rawValue
+    @AppStorage("FileTranscriptionSpeakerDiarization") private var speakerDiarizationEnabled = true
     @Environment(\.theme) private var theme
 
     init(asrService: ASRService) {
@@ -160,6 +161,13 @@ struct MeetingTranscriptionView: View {
                             .stroke(self.theme.palette.cardBorder.opacity(0.5), lineWidth: 1)
                     )
             )
+
+            Toggle(isOn: self.$speakerDiarizationEnabled) {
+                Label("Identify speakers", systemImage: "person.2.wave.2")
+                    .font(.subheadline.weight(.medium))
+            }
+            .toggleStyle(.switch)
+            .disabled(self.transcriptionService.isTranscribing)
 
             if let fileURL = selectedFileURL {
                 // Show selected file
@@ -603,7 +611,11 @@ struct MeetingTranscriptionView: View {
         guard let fileURL = selectedFileURL else { return }
 
         do {
-            _ = try await self.transcriptionService.transcribeFile(fileURL, model: self.selectedModel)
+            _ = try await self.transcriptionService.transcribeFile(
+                fileURL,
+                model: self.selectedModel,
+                diarizeSpeakers: self.speakerDiarizationEnabled
+            )
         } catch {
             DebugLogger.shared.error("Transcription error: \(error)", source: "MeetingTranscriptionView")
         }

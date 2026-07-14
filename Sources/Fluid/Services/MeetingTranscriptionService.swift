@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import CoreMedia
+import FluidAudio
 import Foundation
 import UniformTypeIdentifiers
 
@@ -95,6 +96,7 @@ final class MeetingTranscriptionService: ObservableObject {
     private let asrService: ASRService
     private var preparedProvider: TranscriptionProvider?
     private var preparedProviderModel: SettingsStore.SpeechModel?
+    private var diarizer: OfflineDiarizerManager?
 
     init(asrService: ASRService) {
         self.asrService = asrService
@@ -168,7 +170,8 @@ final class MeetingTranscriptionService: ObservableObject {
     ///   - fileURL: URL to the audio/video file
     func transcribeFile(
         _ fileURL: URL,
-        model: SettingsStore.SpeechModel = .whisperLargeTurbo
+        model: SettingsStore.SpeechModel = .whisperLargeTurbo,
+        diarizeSpeakers: Bool = false
     ) async throws -> TranscriptionResult {
         self.isTranscribing = true
         error = nil
@@ -209,6 +212,32 @@ final class MeetingTranscriptionService: ObservableObject {
             let isVideoContainer = UTType(filenameExtension: fileExtension)
                 .map { $0.conforms(to: .movie) } ?? false
 
+            if diarizeSpeakers {
+                let diarizedResult = try await self.transcribeWithSpeakerDiarization(
+                    fileURL,
+                    provider: provider
+                )
+                let processingTime = Date().timeIntervalSince(startTime)
+                let result = TranscriptionResult(
+                    text: diarizedResult.text,
+                    confidence: diarizedResult.confidence,
+                    duration: duration,
+                    processingTime: processingTime,
+                    fileName: fileURL.lastPathComponent
+                )
+
+                self.currentStatus = "Complete!"
+                self.progress = 1.0
+                self.captureCompletionAnalytics(
+                    fileURL: fileURL,
+                    duration: duration,
+                    processingTime: processingTime
+                )
+                self.result = result
+                FileTranscriptionHistoryStore.shared.addEntry(result)
+                return result
+            }
+
             if provider.prefersNativeFileTranscription && !isVideoContainer {
                 self.currentStatus = duration > 0 ? "Transcribing audio (\(Int(duration))s)..." : "Transcribing audio..."
                 self.progress = 0.3
@@ -231,15 +260,7 @@ final class MeetingTranscriptionService: ObservableObject {
                 self.currentStatus = "Complete!"
                 self.progress = 1.0
 
-                AnalyticsService.shared.capture(
-                    .meetingTranscriptionCompleted,
-                    properties: [
-                        "success": true,
-                        "file_type": fileURL.pathExtension.lowercased(),
-                        "audio_duration_bucket": AnalyticsBuckets.bucketSeconds(duration),
-                        "processing_time_bucket": AnalyticsBuckets.bucketSeconds(processingTime),
-                    ]
-                )
+                self.captureCompletionAnalytics(fileURL: fileURL, duration: duration, processingTime: processingTime)
 
                 self.result = result
                 FileTranscriptionHistoryStore.shared.addEntry(result)
@@ -358,15 +379,7 @@ final class MeetingTranscriptionService: ObservableObject {
                 fileName: fileURL.lastPathComponent
             )
 
-            AnalyticsService.shared.capture(
-                .meetingTranscriptionCompleted,
-                properties: [
-                    "success": true,
-                    "file_type": fileURL.pathExtension.lowercased(),
-                    "audio_duration_bucket": AnalyticsBuckets.bucketSeconds(duration),
-                    "processing_time_bucket": AnalyticsBuckets.bucketSeconds(processingTime),
-                ]
-            )
+            self.captureCompletionAnalytics(fileURL: fileURL, duration: duration, processingTime: processingTime)
 
             self.result = result
             FileTranscriptionHistoryStore.shared.addEntry(result)
@@ -396,6 +409,124 @@ final class MeetingTranscriptionService: ObservableObject {
             )
             throw wrappedError
         }
+    }
+
+    private func transcribeWithSpeakerDiarization(
+        _ fileURL: URL,
+        provider: TranscriptionProvider
+    ) async throws -> (text: String, confidence: Float) {
+        self.currentStatus = "Preparing local speaker detection..."
+        self.progress = 0.25
+
+        let diarizer: OfflineDiarizerManager
+        if let existing = self.diarizer {
+            diarizer = existing
+        } else {
+            let created = OfflineDiarizerManager(config: .default)
+            self.diarizer = created
+            diarizer = created
+        }
+
+        try await diarizer.prepareModels()
+        self.currentStatus = "Detecting speakers..."
+        self.progress = 0.35
+
+        let samples: [Float]
+        do {
+            samples = try AudioConverter().resampleAudioFile(fileURL)
+        } catch {
+            throw TranscriptionError.audioConversionFailed(
+                "Speaker detection could not decode this file: \(error.localizedDescription)"
+            )
+        }
+
+        let diarization = try await diarizer.process(audio: samples)
+        let turns = self.mergedSpeakerTurns(diarization.segments)
+        guard !turns.isEmpty else {
+            throw TranscriptionError.transcriptionFailed("No speakers were detected in this file")
+        }
+
+        var speakerNumbers: [String: Int] = [:]
+        var lines: [String] = []
+        var confidenceTotal: Float = 0
+        var transcribedTurnCount = 0
+
+        for (index, turn) in turns.enumerated() {
+            let startSample = max(0, min(samples.count, Int(Double(turn.start) * 16_000)))
+            let endSample = max(startSample, min(samples.count, Int(Double(turn.end) * 16_000)))
+            guard endSample > startSample else { continue }
+
+            var turnSamples = Array(samples[startSample ..< endSample])
+            if turnSamples.count < 16_000 {
+                turnSamples.append(contentsOf: repeatElement(0, count: 16_000 - turnSamples.count))
+            }
+
+            let transcription = try await provider.transcribe(turnSamples)
+            let text = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+
+            let speakerNumber: Int
+            if let existing = speakerNumbers[turn.speakerID] {
+                speakerNumber = existing
+            } else {
+                speakerNumber = speakerNumbers.count + 1
+                speakerNumbers[turn.speakerID] = speakerNumber
+            }
+
+            lines.append("Speaker \(speakerNumber): \(text)")
+            confidenceTotal += transcription.confidence
+            transcribedTurnCount += 1
+
+            let fraction = Double(index + 1) / Double(turns.count)
+            self.progress = 0.5 + (fraction * 0.45)
+            self.currentStatus = "Transcribing speaker turns... \(Int(fraction * 100))%"
+        }
+
+        guard !lines.isEmpty else {
+            throw TranscriptionError.transcriptionFailed("Speakers were detected, but no speech could be transcribed")
+        }
+
+        let confidence = transcribedTurnCount > 0
+            ? confidenceTotal / Float(transcribedTurnCount)
+            : 0
+        return (lines.joined(separator: "\n\n"), confidence)
+    }
+
+    private func mergedSpeakerTurns(
+        _ segments: [TimedSpeakerSegment]
+    ) -> [(speakerID: String, start: Float, end: Float)] {
+        let sorted = segments
+            .filter { $0.endTimeSeconds > $0.startTimeSeconds }
+            .sorted { lhs, rhs in lhs.startTimeSeconds < rhs.startTimeSeconds }
+
+        var turns: [(speakerID: String, start: Float, end: Float)] = []
+        for segment in sorted {
+            if let last = turns.last,
+               last.speakerID == segment.speakerId,
+               segment.startTimeSeconds - last.end <= 0.75
+            {
+                turns[turns.count - 1].end = max(last.end, segment.endTimeSeconds)
+            } else {
+                turns.append((segment.speakerId, segment.startTimeSeconds, segment.endTimeSeconds))
+            }
+        }
+        return turns
+    }
+
+    private func captureCompletionAnalytics(
+        fileURL: URL,
+        duration: TimeInterval,
+        processingTime: TimeInterval
+    ) {
+        AnalyticsService.shared.capture(
+            .meetingTranscriptionCompleted,
+            properties: [
+                "success": true,
+                "file_type": fileURL.pathExtension.lowercased(),
+                "audio_duration_bucket": AnalyticsBuckets.bucketSeconds(duration),
+                "processing_time_bucket": AnalyticsBuckets.bucketSeconds(processingTime),
+            ]
+        )
     }
 
     /// Export transcription result to text file
