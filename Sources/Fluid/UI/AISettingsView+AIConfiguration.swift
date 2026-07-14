@@ -1019,21 +1019,39 @@ extension AIEnhancementSettingsView {
                 guard self.privateAISelectedModelID == model.id else { return }
                 if verified {
                     self.privateAILoadState = .loaded(modelID: model.id, latencyMilliseconds: latencyMilliseconds)
+                    if PrivateAIMLXUpgradeCoordinator.isUpgradePending() {
+                        PrivateAIMLXUpgradeCoordinator.completeUpgrade()
+                        await PrivateAIIntegrationService.shared.removeInactiveInstalledModels(keeping: model)
+                    }
                 } else {
                     let message = self.viewModel.connectionErrorMessage.isEmpty
                         ? "Model downloaded, but verification failed."
                         : self.viewModel.connectionErrorMessage
-                    self.privateAILoadState = .failed(modelID: model.id, message: message)
+                    self.restoreLlamaAfterFailedMLXUpgrade(message: message, modelID: model.id)
                 }
             } catch {
                 guard self.privateAISelectedModelID == model.id else { return }
-                self.privateAILoadState = .failed(
-                    modelID: model.id,
-                    message: Self.errorMessage(for: error)
+                self.restoreLlamaAfterFailedMLXUpgrade(
+                    message: Self.errorMessage(for: error),
+                    modelID: model.id
                 )
             }
             self.viewModel.refreshProviderItems()
         }
+    }
+
+    private func restoreLlamaAfterFailedMLXUpgrade(message: String, modelID: String) {
+        guard PrivateAIMLXUpgradeCoordinator.isUpgradePending() else {
+            self.privateAILoadState = .failed(modelID: modelID, message: message)
+            return
+        }
+
+        PrivateAIMLXUpgradeCoordinator.restorePreviousLlama()
+        self.viewModel.onAppear()
+        self.privateAILoadState = .failed(
+            modelID: modelID,
+            message: "MLX upgrade failed. Your previous llama.cpp model is still active. \(message)"
+        )
     }
 
     private func verifyPrivateAIConnection(_ model: PrivateAIRegisteredModel) {
@@ -1906,7 +1924,7 @@ extension AIEnhancementSettingsView {
         return nil
     }
 
-    private func selectProvider(_ providerID: String) {
+    func selectProvider(_ providerID: String) {
         self.viewModel.selectProvider(providerID)
     }
 
