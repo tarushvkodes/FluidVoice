@@ -18,6 +18,7 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
     let processingTime: TimeInterval
     let confidence: Float
     let text: String
+    let subtitleCues: [SubtitleCue]
 
     init(
         id: UUID = UUID(),
@@ -26,7 +27,8 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         duration: TimeInterval,
         processingTime: TimeInterval,
         confidence: Float,
-        text: String
+        text: String,
+        subtitleCues: [SubtitleCue] = []
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -35,6 +37,7 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.processingTime = processingTime
         self.confidence = confidence
         self.text = text
+        self.subtitleCues = subtitleCues
     }
 
     init(from result: TranscriptionResult) {
@@ -45,6 +48,7 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
         self.processingTime = result.processingTime
         self.confidence = result.confidence
         self.text = result.text
+        self.subtitleCues = result.subtitleCues
     }
 
     /// Preview text for list display (first 80 chars)
@@ -80,8 +84,25 @@ struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
             duration: self.duration,
             processingTime: self.processingTime,
             fileName: self.fileName,
-            timestamp: self.timestamp
+            timestamp: self.timestamp,
+            subtitleCues: self.subtitleCues
         )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, timestamp, fileName, duration, processingTime, confidence, text, subtitleCues
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.timestamp = try c.decode(Date.self, forKey: .timestamp)
+        self.fileName = try c.decode(String.self, forKey: .fileName)
+        self.duration = try c.decode(TimeInterval.self, forKey: .duration)
+        self.processingTime = try c.decode(TimeInterval.self, forKey: .processingTime)
+        self.confidence = try c.decode(Float.self, forKey: .confidence)
+        self.text = try c.decode(String.self, forKey: .text)
+        self.subtitleCues = try c.decodeIfPresent([SubtitleCue].self, forKey: .subtitleCues) ?? []
     }
 }
 

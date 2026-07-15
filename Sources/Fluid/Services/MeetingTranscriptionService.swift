@@ -5,6 +5,12 @@ import FluidAudio
 import Foundation
 import UniformTypeIdentifiers
 
+struct SubtitleCue: Codable, Equatable, Sendable {
+    let startSeconds: Double
+    let endSeconds: Double
+    let text: String
+}
+
 /// Result of a transcription operation
 struct TranscriptionResult: Identifiable, Sendable, Codable {
     let id: UUID
@@ -14,6 +20,7 @@ struct TranscriptionResult: Identifiable, Sendable, Codable {
     let processingTime: TimeInterval
     let fileName: String
     let timestamp: Date
+    let subtitleCues: [SubtitleCue]
 
     init(
         id: UUID = UUID(),
@@ -22,7 +29,8 @@ struct TranscriptionResult: Identifiable, Sendable, Codable {
         duration: TimeInterval,
         processingTime: TimeInterval,
         fileName: String,
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        subtitleCues: [SubtitleCue] = []
     ) {
         self.id = id
         self.text = text
@@ -31,10 +39,11 @@ struct TranscriptionResult: Identifiable, Sendable, Codable {
         self.processingTime = processingTime
         self.fileName = fileName
         self.timestamp = timestamp
+        self.subtitleCues = subtitleCues
     }
 
     enum CodingKeys: String, CodingKey {
-        case text, confidence, duration, processingTime, fileName, timestamp
+        case text, confidence, duration, processingTime, fileName, timestamp, subtitleCues
     }
 
     init(from decoder: Decoder) throws {
@@ -46,6 +55,7 @@ struct TranscriptionResult: Identifiable, Sendable, Codable {
         self.processingTime = try c.decode(TimeInterval.self, forKey: .processingTime)
         self.fileName = try c.decode(String.self, forKey: .fileName)
         self.timestamp = try c.decode(Date.self, forKey: .timestamp)
+        self.subtitleCues = try c.decodeIfPresent([SubtitleCue].self, forKey: .subtitleCues) ?? []
     }
 
     func encode(to encoder: Encoder) throws {
@@ -56,6 +66,7 @@ struct TranscriptionResult: Identifiable, Sendable, Codable {
         try c.encode(self.processingTime, forKey: .processingTime)
         try c.encode(self.fileName, forKey: .fileName)
         try c.encode(self.timestamp, forKey: .timestamp)
+        try c.encode(self.subtitleCues, forKey: .subtitleCues)
     }
 }
 
@@ -223,7 +234,8 @@ final class MeetingTranscriptionService: ObservableObject {
                     confidence: diarizedResult.confidence,
                     duration: duration,
                     processingTime: processingTime,
-                    fileName: fileURL.lastPathComponent
+                    fileName: fileURL.lastPathComponent,
+                    subtitleCues: diarizedResult.subtitleCues
                 )
 
                 self.currentStatus = "Complete!"
@@ -233,6 +245,46 @@ final class MeetingTranscriptionService: ObservableObject {
                     duration: duration,
                     processingTime: processingTime
                 )
+                self.result = result
+                FileTranscriptionHistoryStore.shared.addEntry(result)
+                return result
+            }
+
+            if isVideoContainer, let whisperProvider = provider as? WhisperProvider {
+                self.currentStatus = "Preparing video audio..."
+                self.progress = 0.3
+                let samples: [Float]
+                do {
+                    samples = try AudioConverter().resampleAudioFile(fileURL)
+                } catch {
+                    throw TranscriptionError.audioConversionFailed(
+                        "Could not decode video audio: \(error.localizedDescription)"
+                    )
+                }
+
+                self.currentStatus = "Creating timestamped subtitles..."
+                self.progress = 0.5
+                let segments = try await whisperProvider.transcribeTimed(samples)
+                let cues = segments.map {
+                    SubtitleCue(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds, text: $0.text)
+                }
+                let text = cues.map(\.text).joined(separator: " ")
+                guard !text.isEmpty else {
+                    throw TranscriptionError.transcriptionFailed("No speech was detected in this video")
+                }
+
+                let processingTime = Date().timeIntervalSince(startTime)
+                let result = TranscriptionResult(
+                    text: text,
+                    confidence: 1,
+                    duration: duration,
+                    processingTime: processingTime,
+                    fileName: fileURL.lastPathComponent,
+                    subtitleCues: cues
+                )
+                self.currentStatus = "Complete!"
+                self.progress = 1
+                self.captureCompletionAnalytics(fileURL: fileURL, duration: duration, processingTime: processingTime)
                 self.result = result
                 FileTranscriptionHistoryStore.shared.addEntry(result)
                 return result
@@ -414,7 +466,7 @@ final class MeetingTranscriptionService: ObservableObject {
     private func transcribeWithSpeakerDiarization(
         _ fileURL: URL,
         provider: TranscriptionProvider
-    ) async throws -> (text: String, confidence: Float) {
+    ) async throws -> (text: String, confidence: Float, subtitleCues: [SubtitleCue]) {
         self.currentStatus = "Preparing local speaker detection..."
         self.progress = 0.25
 
@@ -497,14 +549,14 @@ final class MeetingTranscriptionService: ObservableObject {
         let confidence = transcribedTurnCount > 0
             ? confidenceTotal / Float(transcribedTurnCount)
             : 0
-        return (lines.joined(separator: "\n\n"), confidence)
+        return (lines.joined(separator: "\n\n"), confidence, [])
     }
 
     private func transcribeContinuousWhisperWithSpeakerLabels(
         samples: [Float],
         diarization: [TimedSpeakerSegment],
         provider: WhisperProvider
-    ) async throws -> (text: String, confidence: Float) {
+    ) async throws -> (text: String, confidence: Float, subtitleCues: [SubtitleCue]) {
         self.currentStatus = "Transcribing continuous audio..."
         self.progress = 0.5
 
@@ -515,6 +567,7 @@ final class MeetingTranscriptionService: ObservableObject {
 
         var speakerNumbers: [String: Int] = [:]
         var paragraphs: [(speaker: Int, text: String)] = []
+        var subtitleCues: [SubtitleCue] = []
 
         for segment in timedSegments {
             guard let speakerID = self.bestSpeakerID(
@@ -538,6 +591,11 @@ final class MeetingTranscriptionService: ObservableObject {
             } else {
                 paragraphs.append((speakerNumber, segment.text))
             }
+            subtitleCues.append(SubtitleCue(
+                startSeconds: segment.startSeconds,
+                endSeconds: segment.endSeconds,
+                text: "Speaker \(speakerNumber): \(segment.text)"
+            ))
         }
 
         guard !paragraphs.isEmpty else {
@@ -550,7 +608,7 @@ final class MeetingTranscriptionService: ObservableObject {
         let text = paragraphs
             .map { "Speaker \($0.speaker): \($0.text)" }
             .joined(separator: "\n\n")
-        return (text, 1.0)
+        return (text, 1.0, subtitleCues)
     }
 
     private func bestSpeakerID(
@@ -630,6 +688,34 @@ final class MeetingTranscriptionService: ObservableObject {
 
         try content.write(to: destinationURL, atomically: true, encoding: .utf8)
     }
+
+    nonisolated func exportToSRT(_ result: TranscriptionResult, to destinationURL: URL) throws {
+        guard !result.subtitleCues.isEmpty else {
+            throw TranscriptionError.transcriptionFailed("This transcription does not contain subtitle timestamps")
+        }
+        try Self.srtContent(for: result.subtitleCues)
+            .write(to: destinationURL, atomically: true, encoding: .utf8)
+    }
+
+    private nonisolated static func srtContent(for cues: [SubtitleCue]) -> String {
+        cues.enumerated().map { index, cue in
+            """
+            \(index + 1)
+            \(Self.srtTimestamp(cue.startSeconds)) --> \(Self.srtTimestamp(cue.endSeconds))
+            \(cue.text.replacingOccurrences(of: "\n", with: " "))
+            """
+        }.joined(separator: "\n\n") + "\n"
+    }
+
+    private nonisolated static func srtTimestamp(_ seconds: Double) -> String {
+        let milliseconds = max(0, Int((seconds * 1000).rounded()))
+        let hours = milliseconds / 3_600_000
+        let minutes = (milliseconds % 3_600_000) / 60_000
+        let secs = (milliseconds % 60_000) / 1000
+        let millis = milliseconds % 1000
+        return String(format: "%02d:%02d:%02d,%03d", hours, minutes, secs, millis)
+    }
+
 
     /// Export transcription result to JSON
     nonisolated func exportToJSON(_ result: TranscriptionResult, to destinationURL: URL) throws {

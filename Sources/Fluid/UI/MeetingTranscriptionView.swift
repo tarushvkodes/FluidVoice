@@ -26,11 +26,13 @@ struct MeetingTranscriptionView: View {
     enum ExportFormat: String, CaseIterable {
         case text = "Text (.txt)"
         case json = "JSON (.json)"
+        case srt = "Subtitles (.srt)"
 
         var fileExtension: String {
             switch self {
             case .text: return "txt"
             case .json: return "json"
+            case .srt: return "srt"
             }
         }
     }
@@ -112,7 +114,7 @@ struct MeetingTranscriptionView: View {
                 format: self.exportFormat,
                 service: self.transcriptionService
             ),
-            contentType: self.exportFormat == .text ? .plainText : .json,
+            contentType: self.exportFormat == .json ? .json : (UTType(filenameExtension: self.exportFormat.fileExtension) ?? .plainText),
             defaultFilename: "\((self.exportResult?.fileName).map { "\($0)_transcript" } ?? "transcript").\(self.exportFormat.fileExtension)"
         ) { exportCompletion in
             switch exportCompletion {
@@ -352,6 +354,21 @@ struct MeetingTranscriptionView: View {
 
             Divider()
 
+            if !result.subtitleCues.isEmpty {
+                HStack(spacing: 10) {
+                    Button {
+                        self.exportFormat = .srt
+                        self.exportResult = result
+                        self.showingExportDialog = true
+                    } label: {
+                        Label("Export SRT", systemImage: "captions.bubble")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+                }
+            }
+
             // Transcription text
             ScrollView {
                 Text(result.text)
@@ -493,6 +510,19 @@ struct MeetingTranscriptionView: View {
                 .buttonStyle(.borderless)
             }
             Divider()
+            if !result.subtitleCues.isEmpty {
+                HStack(spacing: 10) {
+                    Button {
+                        self.exportFormat = .srt
+                        self.exportResult = result
+                        self.showingExportDialog = true
+                    } label: {
+                        Label("Export SRT", systemImage: "captions.bubble")
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer()
+                }
+            }
             ScrollView {
                 Text(entry.text)
                     .font(.body)
@@ -647,6 +677,7 @@ struct MeetingTranscriptionView: View {
             }
         }
     }
+
 }
 
 // MARK: - Document for Export
@@ -682,6 +713,8 @@ struct TranscriptionDocument: FileDocument {
             try self.service.exportToText(self.result, to: tempURL)
         case .json:
             try self.service.exportToJSON(self.result, to: tempURL)
+        case .srt:
+            try self.service.exportToSRT(self.result, to: tempURL)
         }
 
         let data = try Data(contentsOf: tempURL)
