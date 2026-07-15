@@ -296,6 +296,15 @@ struct MeetingTranscriptionView: View {
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
+
+            if !self.transcriptionService.liveTranscript.isEmpty {
+                Text(self.transcriptionService.liveTranscript)
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .lineLimit(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
         }
         .padding()
         .background(
@@ -321,10 +330,16 @@ struct MeetingTranscriptionView: View {
                     HStack(spacing: 16) {
                         Label("\(String(format: "%.1f", result.duration))s", systemImage: "clock")
                         Label("\(String(format: "%.0f%%", result.confidence * 100))", systemImage: "checkmark.circle")
-                        Label(
-                            "\(String(format: "%.1f", result.duration / result.processingTime))x",
-                            systemImage: "speedometer"
-                        )
+                        if result.processingTime > 0, result.duration > 0 {
+                            Label(
+                                "\(String(format: "%.1f", result.duration / result.processingTime))x realtime",
+                                systemImage: "speedometer"
+                            )
+                            Label(
+                                "\(String(format: "%.1f", result.processingTime))s processing",
+                                systemImage: "timer"
+                            )
+                        }
                     }
                     .font(.caption)
                     .foregroundColor(.secondary)

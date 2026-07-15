@@ -77,6 +77,9 @@ final class MeetingTranscriptionService: ObservableObject {
     @Published var isTranscribing: Bool = false
     @Published var progress: Double = 0.0
     @Published var currentStatus: String = ""
+    @Published var liveTranscript: String = ""
+    @Published var elapsedProcessingTime: Double = 0
+    @Published var processedAudioDuration: Double = 0
     @Published var error: String?
     @Published var result: TranscriptionResult?
 
@@ -187,6 +190,9 @@ final class MeetingTranscriptionService: ObservableObject {
         self.isTranscribing = true
         error = nil
         self.progress = 0.0
+        self.liveTranscript = ""
+        self.elapsedProcessingTime = 0
+        self.processedAudioDuration = 0
         let startTime = Date()
 
         defer {
@@ -264,7 +270,10 @@ final class MeetingTranscriptionService: ObservableObject {
 
                 self.currentStatus = "Creating timestamped subtitles..."
                 self.progress = 0.5
-                let segments = try await whisperProvider.transcribeTimed(samples)
+                let segments = try await whisperProvider.transcribeTimed(samples) { [weak self] newSegments, processed in
+                    guard let self else { return }
+                    self.appendLiveSegments(newSegments, processed: processed, duration: duration, startedAt: startTime)
+                }
                 let cues = segments.map {
                     SubtitleCue(startSeconds: $0.startSeconds, endSeconds: $0.endSeconds, text: $0.text)
                 }
@@ -393,6 +402,7 @@ final class MeetingTranscriptionService: ObservableObject {
 
                 if !chunkResult.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     allTranscriptions.append(chunkResult.text)
+                    self.liveTranscript = allTranscriptions.joined(separator: " ")
                     totalConfidence += chunkResult.confidence
                     chunkCount += 1
                 }
@@ -401,8 +411,11 @@ final class MeetingTranscriptionService: ObservableObject {
 
                 // Update progress
                 let progressPercent = Double(currentFrame) / Double(audioFile.length)
+                self.processedAudioDuration = duration * progressPercent
+                self.elapsedProcessingTime = Date().timeIntervalSince(startTime)
                 self.progress = 0.3 + (progressPercent * 0.6) // Progress from 30% to 90%
-                self.currentStatus = "Transcribing... \(Int(progressPercent * 100))%"
+                let speed = self.elapsedProcessingTime > 0 ? self.processedAudioDuration / self.elapsedProcessingTime : 0
+                self.currentStatus = "Transcribing... \(Int(progressPercent * 100))% • \(String(format: "%.1f", speed))x realtime"
             }
 
             if allTranscriptions.isEmpty {
@@ -560,7 +573,12 @@ final class MeetingTranscriptionService: ObservableObject {
         self.currentStatus = "Transcribing continuous audio..."
         self.progress = 0.5
 
-        let timedSegments = try await provider.transcribeTimed(samples)
+        let transcriptionStart = Date()
+        let totalDuration = Double(samples.count) / 16_000
+        let timedSegments = try await provider.transcribeTimed(samples) { [weak self] newSegments, processed in
+            guard let self else { return }
+            self.appendLiveSegments(newSegments, processed: processed, duration: totalDuration, startedAt: transcriptionStart)
+        }
         let speakerSegments = diarization
             .filter { $0.endTimeSeconds > $0.startTimeSeconds }
             .sorted { $0.startTimeSeconds < $1.startTimeSeconds }
@@ -733,6 +751,27 @@ final class MeetingTranscriptionService: ObservableObject {
         self.error = nil
         self.currentStatus = ""
         self.progress = 0.0
+        self.liveTranscript = ""
+        self.elapsedProcessingTime = 0
+        self.processedAudioDuration = 0
+    }
+
+    private func appendLiveSegments(
+        _ segments: [WhisperTimedSegment],
+        processed: Double,
+        duration: Double,
+        startedAt: Date
+    ) {
+        let text = segments.map(\.text).joined(separator: " ")
+        if !text.isEmpty {
+            self.liveTranscript += self.liveTranscript.isEmpty ? text : " " + text
+        }
+        self.processedAudioDuration = processed
+        self.elapsedProcessingTime = Date().timeIntervalSince(startedAt)
+        let fraction = duration > 0 ? min(1, processed / duration) : 0
+        self.progress = 0.5 + (fraction * 0.45)
+        let speed = self.elapsedProcessingTime > 0 ? processed / self.elapsedProcessingTime : 0
+        self.currentStatus = "Transcribed \(Int(processed))s • \(String(format: "%.1f", speed))x realtime"
     }
 
     // MARK: - Audio Resampling Helpers

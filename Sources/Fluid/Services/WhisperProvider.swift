@@ -377,7 +377,11 @@ final class WhisperProvider: TranscriptionProvider {
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
     }
 
-    func transcribeTimed(_ samples: [Float]) async throws -> [WhisperTimedSegment] {
+    func transcribeTimed(
+        _ samples: [Float],
+        chunkDurationSeconds: Double = 90,
+        progressHandler: (@MainActor @Sendable ([WhisperTimedSegment], Double) -> Void)? = nil
+    ) async throws -> [WhisperTimedSegment] {
         let minSamples = 16_000
         guard samples.count >= minSamples else {
             throw NSError(
@@ -395,29 +399,42 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        let transcript = try await session.run(
-            samples,
-            options: RunOptions(
-                timestamps: .segment,
-                family: .whisper(WhisperRunOptions(
-                    conditionOnPrevTokens: false,
-                    temperature: 0,
-                    temperatureInc: 0.2,
-                    compressionRatioThold: 2.4,
-                    logprobThold: -1,
-                    noSpeechThold: 0.6
-                ))
+        let samplesPerChunk = max(minSamples, Int(chunkDurationSeconds * 16_000))
+        var allSegments: [WhisperTimedSegment] = []
+        for startSample in stride(from: 0, to: samples.count, by: samplesPerChunk) {
+            let endSample = min(samples.count, startSample + samplesPerChunk)
+            var chunk = Array(samples[startSample ..< endSample])
+            if chunk.count < minSamples {
+                chunk.append(contentsOf: repeatElement(0, count: minSamples - chunk.count))
+            }
+            let transcript = try await session.run(
+                chunk,
+                options: RunOptions(
+                    timestamps: .segment,
+                    family: .whisper(WhisperRunOptions(
+                        conditionOnPrevTokens: false,
+                        temperature: 0,
+                        temperatureInc: 0.2,
+                        compressionRatioThold: 2.4,
+                        logprobThold: -1,
+                        noSpeechThold: 0.6
+                    ))
+                )
             )
-        )
-        return transcript.segments.compactMap { segment in
-            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty, segment.t1Ms > segment.t0Ms else { return nil }
-            return WhisperTimedSegment(
-                startSeconds: Double(segment.t0Ms) / 1000,
-                endSeconds: Double(segment.t1Ms) / 1000,
-                text: text
-            )
+            let offset = Double(startSample) / 16_000
+            let chunkSegments = transcript.segments.compactMap { segment -> WhisperTimedSegment? in
+                let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty, segment.t1Ms > segment.t0Ms else { return nil }
+                return WhisperTimedSegment(
+                    startSeconds: offset + (Double(segment.t0Ms) / 1000),
+                    endSeconds: min(Double(samples.count) / 16_000, offset + (Double(segment.t1Ms) / 1000)),
+                    text: text
+                )
+            }
+            allSegments.append(contentsOf: chunkSegments)
+            await progressHandler?(chunkSegments, Double(endSample) / 16_000)
         }
+        return allSegments
     }
 
     func modelsExistOnDisk() -> Bool {
