@@ -205,6 +205,20 @@ Run the build using the script: `./build.sh`
 ./build.sh
 ```
 
+### Stable local development app
+
+To keep macOS Accessibility permission across local builds, create a persistent
+local signing identity once and run the app from a fixed path:
+
+```bash
+./scripts/setup-dev-signing.sh
+./scripts/run-dev.sh
+```
+
+Subsequent changes only require `./scripts/run-dev.sh`. The script incrementally
+builds, updates `~/Applications/FluidVoice Dev.app`, signs it with the same
+identity, and relaunches it without replacing the release app in `/Applications`.
+
 ---
 
 ## Contributing
