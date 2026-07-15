@@ -361,7 +361,17 @@ final class WhisperProvider: TranscriptionProvider {
 
         let transcript = try await session.run(
             samples,
-            options: RunOptions(timestamps: .segment)
+            options: RunOptions(
+                timestamps: .segment,
+                family: .whisper(WhisperRunOptions(
+                    conditionOnPrevTokens: false,
+                    temperature: 0,
+                    temperatureInc: 0.2,
+                    compressionRatioThold: 2.4,
+                    logprobThold: -1,
+                    noSpeechThold: 0.6
+                ))
+            )
         )
         let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
@@ -387,7 +397,17 @@ final class WhisperProvider: TranscriptionProvider {
 
         let transcript = try await session.run(
             samples,
-            options: RunOptions(timestamps: .segment)
+            options: RunOptions(
+                timestamps: .segment,
+                family: .whisper(WhisperRunOptions(
+                    conditionOnPrevTokens: false,
+                    temperature: 0,
+                    temperatureInc: 0.2,
+                    compressionRatioThold: 2.4,
+                    logprobThold: -1,
+                    noSpeechThold: 0.6
+                ))
+            )
         )
         return transcript.segments.compactMap { segment in
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
