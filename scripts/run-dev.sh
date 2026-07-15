@@ -24,7 +24,7 @@ xcodebuild \
     CODE_SIGNING_ALLOWED=NO \
     -quiet
 
-osascript -e 'tell application id "com.FluidApp.app" to quit' 2>/dev/null || true
+osascript -e 'tell application id "com.FluidApp.app.dev" to quit' 2>/dev/null || true
 mkdir -p "$(dirname "$dev_app")"
 
 if [[ "$dev_app" != *"FluidVoice Dev.app" ]]; then
@@ -38,7 +38,20 @@ if [[ -d /Applications/FluidVoice.app/Contents/Frameworks ]]; then
     ditto /Applications/FluidVoice.app/Contents/Frameworks "$dev_app/Contents/Frameworks"
 fi
 
-codesign --force --deep --options runtime --sign "$identity" "$dev_app"
+plist="$dev_app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.FluidApp.app.dev' "$plist"
+if /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$plist" >/dev/null 2>&1; then
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName FluidVoice Dev' "$plist"
+else
+    /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string FluidVoice Dev' "$plist"
+fi
+if /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$plist" >/dev/null 2>&1; then
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleName FluidVoice Dev' "$plist"
+else
+    /usr/libexec/PlistBuddy -c 'Add :CFBundleName string FluidVoice Dev' "$plist"
+fi
+
+codesign --force --deep --options runtime --entitlements "$repo_root/Fluid.entitlements" --sign "$identity" "$dev_app"
 codesign --verify --deep --strict "$dev_app"
 open "$dev_app"
 
