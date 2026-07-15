@@ -4578,11 +4578,8 @@ final class SettingsStore: ObservableObject {
             default:
                 // Whisper models
                 guard let whisperFile = self.whisperModelFile else { return false }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-                    .appendingPathComponent("WhisperModels")
-                let modelURL = directory?.appendingPathComponent(whisperFile)
+                let modelURL = WhisperModelStorage.persistentDirectory.appendingPathComponent(whisperFile)
                 guard
-                    let modelURL,
                     let attributes = try? FileManager.default.attributesOfItem(atPath: modelURL.path),
                     let size = attributes[.size] as? NSNumber,
                     size.int64Value > 0

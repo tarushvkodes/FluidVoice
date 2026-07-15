@@ -441,6 +441,14 @@ final class MeetingTranscriptionService: ObservableObject {
         }
 
         let diarization = try await diarizer.process(audio: samples)
+        if let whisperProvider = provider as? WhisperProvider {
+            return try await self.transcribeContinuousWhisperWithSpeakerLabels(
+                samples: samples,
+                diarization: diarization.segments,
+                provider: whisperProvider
+            )
+        }
+
         let turns = self.mergedSpeakerTurns(diarization.segments)
         guard !turns.isEmpty else {
             throw TranscriptionError.transcriptionFailed("No speakers were detected in this file")
@@ -490,6 +498,83 @@ final class MeetingTranscriptionService: ObservableObject {
             ? confidenceTotal / Float(transcribedTurnCount)
             : 0
         return (lines.joined(separator: "\n\n"), confidence)
+    }
+
+    private func transcribeContinuousWhisperWithSpeakerLabels(
+        samples: [Float],
+        diarization: [TimedSpeakerSegment],
+        provider: WhisperProvider
+    ) async throws -> (text: String, confidence: Float) {
+        self.currentStatus = "Transcribing continuous audio..."
+        self.progress = 0.5
+
+        let timedSegments = try await provider.transcribeTimed(samples)
+        let speakerSegments = diarization
+            .filter { $0.endTimeSeconds > $0.startTimeSeconds }
+            .sorted { $0.startTimeSeconds < $1.startTimeSeconds }
+
+        var speakerNumbers: [String: Int] = [:]
+        var paragraphs: [(speaker: Int, text: String)] = []
+
+        for segment in timedSegments {
+            guard let speakerID = self.bestSpeakerID(
+                forStart: segment.startSeconds,
+                end: segment.endSeconds,
+                diarization: speakerSegments
+            ) else {
+                continue
+            }
+
+            let speakerNumber: Int
+            if let existing = speakerNumbers[speakerID] {
+                speakerNumber = existing
+            } else {
+                speakerNumber = speakerNumbers.count + 1
+                speakerNumbers[speakerID] = speakerNumber
+            }
+
+            if let last = paragraphs.last, last.speaker == speakerNumber {
+                paragraphs[paragraphs.count - 1].text += " " + segment.text
+            } else {
+                paragraphs.append((speakerNumber, segment.text))
+            }
+        }
+
+        guard !paragraphs.isEmpty else {
+            throw TranscriptionError.transcriptionFailed(
+                "Speech was detected, but no timestamped transcription overlapped it"
+            )
+        }
+
+        self.progress = 0.95
+        let text = paragraphs
+            .map { "Speaker \($0.speaker): \($0.text)" }
+            .joined(separator: "\n\n")
+        return (text, 1.0)
+    }
+
+    private func bestSpeakerID(
+        forStart start: Double,
+        end: Double,
+        diarization: [TimedSpeakerSegment]
+    ) -> String? {
+        var bestSpeakerID: String?
+        var bestOverlap = 0.0
+
+        for speakerSegment in diarization {
+            let speakerStart = Double(speakerSegment.startTimeSeconds)
+            let speakerEnd = Double(speakerSegment.endTimeSeconds)
+            if speakerStart >= end { break }
+            guard speakerEnd > start else { continue }
+
+            let overlap = min(end, speakerEnd) - max(start, speakerStart)
+            if overlap > bestOverlap {
+                bestOverlap = overlap
+                bestSpeakerID = speakerSegment.speakerId
+            }
+        }
+
+        return bestSpeakerID
     }
 
     private func mergedSpeakerTurns(
