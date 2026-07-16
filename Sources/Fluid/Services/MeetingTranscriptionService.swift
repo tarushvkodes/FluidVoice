@@ -94,17 +94,21 @@ final class MeetingTranscriptionService: ObservableObject {
             guard utType.conforms(to: .audio) || utType.conforms(to: .movie) else { return nil }
             return utType.preferredFilenameExtension
         }
-        return Set(extensions)
+        return Set(extensions).union(["mkv"])
     }()
 
     /// Content types accepted by the file picker — broad categories so the OS filters naturally.
-    static let allowedContentTypes: [UTType] = [.audio, .movie]
+    static let allowedContentTypes: [UTType] = [
+        .audio,
+        .movie,
+        UTType(filenameExtension: "mkv") ?? UTType(importedAs: "org.matroska.mkv", conformingTo: .audiovisualContent),
+    ]
 
     /// User-facing description of supported formats (curated for readability).
-    static let supportedFormatsDescription = "Supported: WAV, MP3, M4A, OGG, MP4, MOV, and more"
+    static let supportedFormatsDescription = "Supported: WAV, MP3, M4A, OGG, MP4, MOV, MKV, and more"
 
     /// Error copy shown when a dropped file is not accepted.
-    static let dropErrorCopy = "Accepted file types: WAV, MP3, M4A, OGG, MP4, MOV, and more."
+    static let dropErrorCopy = "Accepted file types: WAV, MP3, M4A, OGG, MP4, MOV, MKV, and more."
 
     /// Share the ASR service instance to avoid loading models twice
     private let asrService: ASRService
@@ -216,7 +220,7 @@ final class MeetingTranscriptionService: ObservableObject {
             self.progress = 0.2
 
             let asset = AVAsset(url: fileURL)
-            let duration: Double
+            var duration: Double
             do {
                 let cmDuration = try await asset.load(.duration)
                 duration = CMTimeGetSeconds(cmDuration)
@@ -225,9 +229,12 @@ final class MeetingTranscriptionService: ObservableObject {
                 duration = 0
                 DebugLogger.shared.warning("Could not determine audio duration: \(error.localizedDescription)", source: "MeetingTranscriptionService")
             }
+            if (!duration.isFinite || duration <= 0), fileExtension == "mkv" {
+                duration = self.probeMediaDuration(fileURL) ?? 0
+            }
 
-            let isVideoContainer = UTType(filenameExtension: fileExtension)
-                .map { $0.conforms(to: .movie) } ?? false
+            let isVideoContainer = fileExtension == "mkv" || (UTType(filenameExtension: fileExtension)
+                .map { $0.conforms(to: .movie) } ?? false)
 
             if diarizeSpeakers {
                 let diarizedResult = try await self.transcribeWithSpeakerDiarization(
@@ -261,7 +268,7 @@ final class MeetingTranscriptionService: ObservableObject {
                 self.progress = 0.3
                 let samples: [Float]
                 do {
-                    samples = try AudioConverter().resampleAudioFile(fileURL)
+                    samples = try self.decodeAudioSamples(fileURL)
                 } catch {
                     throw TranscriptionError.audioConversionFailed(
                         "Could not decode video audio: \(error.localizedDescription)"
@@ -498,7 +505,7 @@ final class MeetingTranscriptionService: ObservableObject {
 
         let samples: [Float]
         do {
-            samples = try AudioConverter().resampleAudioFile(fileURL)
+            samples = try self.decodeAudioSamples(fileURL)
         } catch {
             throw TranscriptionError.audioConversionFailed(
                 "Speaker detection could not decode this file: \(error.localizedDescription)"
@@ -772,6 +779,85 @@ final class MeetingTranscriptionService: ObservableObject {
         self.progress = 0.5 + (fraction * 0.45)
         let speed = self.elapsedProcessingTime > 0 ? processed / self.elapsedProcessingTime : 0
         self.currentStatus = "Transcribed \(Int(processed))s • \(String(format: "%.1f", speed))x realtime"
+    }
+
+    private nonisolated func decodeAudioSamples(_ fileURL: URL) throws -> [Float] {
+        guard fileURL.pathExtension.lowercased() == "mkv" else {
+            return try AudioConverter().resampleAudioFile(fileURL)
+        }
+
+        guard let ffmpegURL = Self.mediaToolURL(named: "ffmpeg") else {
+            throw NSError(
+                domain: "MeetingTranscriptionService",
+                code: -20,
+                userInfo: [NSLocalizedDescriptionKey: "MKV transcription requires FFmpeg. Install it with: brew install ffmpeg"]
+            )
+        }
+
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fluidvoice-mkv-\(UUID().uuidString)")
+            .appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+        let process = Process()
+        let errorPipe = Pipe()
+        process.executableURL = ffmpegURL
+        process.arguments = [
+            "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", fileURL.path,
+            "-map", "0:a:0", "-vn",
+            "-ac", "1", "-ar", "16000", "-c:a", "pcm_f32le",
+            temporaryURL.path,
+        ]
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let detail = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            throw NSError(
+                domain: "MeetingTranscriptionService",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: detail?.isEmpty == false ? detail! : "FFmpeg could not extract audio from this MKV file"]
+            )
+        }
+
+        return try AudioConverter().resampleAudioFile(temporaryURL)
+    }
+
+    private nonisolated func probeMediaDuration(_ fileURL: URL) -> Double? {
+        guard let ffprobeURL = Self.mediaToolURL(named: "ffprobe") else { return nil }
+        let process = Process()
+        let outputPipe = Pipe()
+        process.executableURL = ffprobeURL
+        process.arguments = [
+            "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", fileURL.path,
+        ]
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            guard let value = String(data: data, encoding: .utf8)
+                .flatMap({ Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }),
+                value.isFinite,
+                value > 0
+            else { return nil }
+            return value
+        } catch {
+            return nil
+        }
+    }
+
+    private nonisolated static func mediaToolURL(named name: String) -> URL? {
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+            .map { URL(fileURLWithPath: $0).appendingPathComponent(name) }
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
     // MARK: - Audio Resampling Helpers
