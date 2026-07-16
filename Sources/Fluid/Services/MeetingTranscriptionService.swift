@@ -715,10 +715,22 @@ final class MeetingTranscriptionService: ObservableObject {
     }
 
     nonisolated func exportToSRT(_ result: TranscriptionResult, to destinationURL: URL) throws {
-        guard !result.subtitleCues.isEmpty else {
+        let normalizedCues = result.subtitleCues
+            .filter {
+                $0.startSeconds.isFinite &&
+                    $0.endSeconds.isFinite &&
+                    $0.endSeconds > $0.startSeconds &&
+                    !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            .sorted {
+                if $0.startSeconds != $1.startSeconds { return $0.startSeconds < $1.startSeconds }
+                if $0.endSeconds != $1.endSeconds { return $0.endSeconds < $1.endSeconds }
+                return $0.text < $1.text
+            }
+        guard !normalizedCues.isEmpty else {
             throw TranscriptionError.transcriptionFailed("This transcription does not contain subtitle timestamps")
         }
-        try Self.srtContent(for: result.subtitleCues)
+        try Self.srtContent(for: normalizedCues)
             .write(to: destinationURL, atomically: true, encoding: .utf8)
     }
 

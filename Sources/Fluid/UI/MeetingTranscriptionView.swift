@@ -1,6 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private extension UTType {
+    static let subRipSubtitle = UTType(filenameExtension: "srt", conformingTo: .plainText) ?? .plainText
+}
+
 struct MeetingTranscriptionView: View {
     let asrService: ASRService
     @StateObject private var transcriptionService: MeetingTranscriptionService
@@ -114,8 +118,8 @@ struct MeetingTranscriptionView: View {
                 format: self.exportFormat,
                 service: self.transcriptionService
             ),
-            contentType: self.exportFormat == .json ? .json : (UTType(filenameExtension: self.exportFormat.fileExtension) ?? .plainText),
-            defaultFilename: "\((self.exportResult?.fileName).map { "\($0)_transcript" } ?? "transcript").\(self.exportFormat.fileExtension)"
+            contentType: self.exportContentType,
+            defaultFilename: self.exportDefaultFilename
         ) { exportCompletion in
             switch exportCompletion {
             case .success:
@@ -128,6 +132,20 @@ struct MeetingTranscriptionView: View {
     }
 
     // MARK: - File Selection Card
+
+    private var exportContentType: UTType {
+        switch self.exportFormat {
+        case .text: return .plainText
+        case .json: return .json
+        case .srt: return .subRipSubtitle
+        }
+    }
+
+    private var exportDefaultFilename: String {
+        guard let fileName = self.exportResult?.fileName else { return "transcript" }
+        let baseName = URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
+        return self.exportFormat == .srt ? baseName : "\(baseName)_transcript"
+    }
 
     private var selectedModel: SettingsStore.SpeechModel {
         SettingsStore.SpeechModel(rawValue: self.selectedModelRawValue) ?? .whisperLargeTurbo
@@ -699,7 +717,7 @@ struct MeetingTranscriptionView: View {
 
 struct TranscriptionDocument: FileDocument {
     static var readableContentTypes: [UTType] {
-        [.plainText, .json]
+        [.plainText, .json, .subRipSubtitle]
     }
 
     let result: TranscriptionResult
