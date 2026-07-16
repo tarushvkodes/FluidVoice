@@ -525,9 +525,6 @@ struct CommandModeView: View {
                             get: { self.settings.effectiveCommandModeProviderID },
                             set: { newValue in
                                 guard !self.settings.commandModeLinkedToGlobal else { return }
-                                if newValue == "apple-intelligence-disabled" || newValue == "apple-intelligence" {
-                                    return
-                                }
                                 guard !self.isPrivateAIProviderID(newValue) else { return }
                                 self.settings.commandModeSelectedProviderID = newValue
                                 self.updateAvailableModels()
@@ -669,12 +666,7 @@ struct CommandModeView: View {
     }
 
     private var builtInProvidersList: [(id: String, name: String)] {
-        // Apple Intelligence disabled for Command Mode (no tool support)
-        ModelRepository.shared.builtInProvidersList(
-            includeAppleIntelligence: true,
-            appleIntelligenceAvailable: false,
-            appleIntelligenceDisabledReason: "No tools"
-        ).filter { !self.isPrivateAIProviderID($0.id) }
+        ModelRepository.shared.builtInProvidersList().filter { !self.isPrivateAIProviderID($0.id) }
     }
 
     private var verifiedBuiltInProvidersList: [(id: String, name: String)] {

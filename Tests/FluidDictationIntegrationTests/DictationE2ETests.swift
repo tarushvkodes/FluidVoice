@@ -14,18 +14,24 @@ final class DictationE2ETests: XCTestCase {
     private let editPromptOffKey = "EditPromptOff"
     private let defaultDictationPromptOverrideKey = "DefaultDictationPromptOverride"
     private let defaultEditPromptOverrideKey = "DefaultEditPromptOverride"
+    private let dictationPromptRoutingScopeKey = "DictationPromptRoutingScope"
     private let savedProvidersKey = "SavedProviders"
     private let selectedProviderIDKey = "SelectedProviderID"
+    private let selectedAIModelKey = "SelectedAIModel"
     private let availableModelsByProviderKey = "AvailableModelsByProvider"
     private let selectedModelByProviderKey = "SelectedModelByProvider"
+    private let dictationPromptConfigurationsKey = "DictationPromptConfigurations"
     private let customDictionaryEntriesKey = "CustomDictionaryEntries"
     private let autoConvertPunctuationEnabledKey = "AutoConvertPunctuationEnabled"
+    private let literalDictationFormattingEnabledKey = "LiteralDictationFormattingEnabled"
     private let punctuationDictionaryPrefixKey = "PunctuationDictionaryPrefix"
     private let punctuationDictionaryRulesKey = "PunctuationDictionaryRules"
     private let commandModeLinkedToGlobalKey = "CommandModeLinkedToGlobal"
     private let commandModeSelectedProviderIDKey = "CommandModeSelectedProviderID"
     private let commandModeSelectedModelKey = "CommandModeSelectedModel"
     private let visualizerNoiseThresholdKey = "VisualizerNoiseThreshold"
+    private let rewriteModeSelectedProviderIDKey = "RewriteModeSelectedProviderID"
+    private let rewriteModeSelectedModelKey = "RewriteModeSelectedModel"
     private var privateAISelectedModelIDKey: String {
         PrivateAIProviderFeature.shared.selectedModelDefaultsKey
     }
@@ -309,6 +315,16 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testPronunciationDictionaryLabelsUseLastDuplicateEntry() {
+        let id = UUID()
+        let labels = FluidAudioProvider.dictionaryLabels(from: [
+            SettingsStore.CustomDictionaryEntry(id: id, triggers: ["old"], replacement: "Old"),
+            SettingsStore.CustomDictionaryEntry(id: id, triggers: ["new"], replacement: "New"),
+        ])
+
+        XCTAssertEqual(labels, [id: "New"])
+    }
+
     func testCustomDictionaryReplacementMatchesPunctuationTriggers() {
         defer { ASRService.invalidateDictionaryCache() }
         let entry = SettingsStore.CustomDictionaryEntry(
@@ -331,21 +347,6 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
-    func testSlashCommandFormattingNormalizesSpokenAndLiteralCommands() {
-        XCTAssertEqual(
-            ASRService.applySlashCommandFormatting("Run slash status and then / model."),
-            "Run /status and then /model."
-        )
-        XCTAssertEqual(
-            ASRService.applySlashCommandFormatting("Type forward slash fix-ci."),
-            "Type /fix-ci."
-        )
-        XCTAssertEqual(
-            ASRService.applySlashCommandFormatting("slash compact"),
-            "/compact"
-        )
-    }
-
     func testSlashCommandFormattingLeavesNonCommandSlashUsageAlone() {
         let text = "Use 1/2 and and/or. Open src slash services. Go to https slash slash example dot com. Slash and burn."
 
@@ -355,54 +356,24 @@ final class DictationE2ETests: XCTestCase {
         )
     }
 
-    func testMentionFormattingExplicitPhrasesWorkWithoutAppContext() {
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting("tag Paul"),
-            "@Paul"
-        )
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting("mention Paul Heinz, please"),
-            "@Paul Heinz, please"
-        )
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting("at sign maxgaav"),
-            "@maxgaav"
-        )
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting("at the rate Sarah"),
-            "@Sarah"
-        )
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting("mention Paul please"),
-            "@Paul please"
-        )
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting("tag Paul tomorrow"),
-            "@Paul tomorrow"
-        )
-    }
+    func testLiteralFormattingCanBeDisabled() {
+        self.withRestoredDefaults(keys: [self.literalDictationFormattingEnabledKey]) {
+            UserDefaults.standard.removeObject(forKey: self.literalDictationFormattingEnabledKey)
+            XCTAssertFalse(SettingsStore.shared.literalDictationFormattingEnabled)
 
-    func testMentionFormattingRelaxedAtNameRequiresMentionAppContext() {
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting(
-                "at Paul can you check this",
-                appName: "Slack",
-                bundleID: "com.tinyspeck.slackmacgap"
-            ),
-            "@Paul can you check this"
-        )
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting(
-                "hey at Paul Heinz can you check this",
-                appName: "Discord",
-                bundleID: "com.hnc.Discord"
-            ),
-            "hey @Paul Heinz can you check this"
-        )
-        XCTAssertEqual(
-            ASRService.applyMentionFormatting("at Paul can you check this", appName: "Notes", bundleID: "com.apple.Notes"),
-            "at Paul can you check this"
-        )
+            UserDefaults.standard.set(false, forKey: self.literalDictationFormattingEnabledKey)
+
+            XCTAssertEqual(ASRService.applySlashCommandFormatting("slash compact"), "slash compact")
+            XCTAssertEqual(ASRService.applyMentionFormatting("mention Paul"), "mention Paul")
+            XCTAssertEqual(
+                ASRService.makeDictationLiteralOutputPlan(
+                    for: "/compact ",
+                    appName: "Codex",
+                    bundleID: "com.openai.codex"
+                ).plainText,
+                "/compact "
+            )
+        }
     }
 
     func testMentionFormattingLeavesProseAlone() {
@@ -519,19 +490,6 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
-    func testSpokenPunctuationFormattingPreservesSlashCommandSpacing() {
-        self.withRestoredDefaults(keys: self.punctuationFormattingDefaultsKeys) {
-            UserDefaults.standard.set(true, forKey: self.autoConvertPunctuationEnabledKey)
-
-            let text = ASRService.applySpokenPunctuationFormatting("Run slash status and open src slash services")
-            XCTAssertEqual(text, "Run slash status and open src slash services")
-            XCTAssertEqual(
-                ASRService.applySlashCommandFormatting(text),
-                "Run /status and open src slash services"
-            )
-        }
-    }
-
     func testSpokenPunctuationFormattingCleansGeneratedCommaNoiseWithPrefix() {
         self.withRestoredDefaults(keys: self.punctuationFormattingDefaultsKeys) {
             UserDefaults.standard.set(true, forKey: self.autoConvertPunctuationEnabledKey)
@@ -642,41 +600,6 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
-    func testTerminalLiteralAutocompleteSpacingRemovesTrailingSpaceForTargetApps() {
-        XCTAssertEqual(
-            ASRService.applyTerminalLiteralAutocompleteSpacing(
-                "/model ",
-                appName: "Codex",
-                bundleID: "com.openai.codex"
-            ),
-            "/model"
-        )
-        XCTAssertEqual(
-            ASRService.applyTerminalLiteralAutocompleteSpacing(
-                "hey @Paul Heinz ",
-                appName: "Slack",
-                bundleID: "com.tinyspeck.slackmacgap"
-            ),
-            "hey @Paul Heinz"
-        )
-        XCTAssertEqual(
-            ASRService.applyTerminalLiteralAutocompleteSpacing(
-                " @Paul ",
-                appName: "Slack",
-                bundleID: "com.tinyspeck.slackmacgap"
-            ),
-            " @Paul"
-        )
-        XCTAssertEqual(
-            ASRService.makeDictationLiteralOutputPlan(
-                for: "@ross.winn ",
-                appName: "Discord",
-                bundleID: "com.hnc.Discord"
-            ).plainText,
-            "@ross.winn"
-        )
-    }
-
     func testTerminalLiteralAutocompleteSpacingLeavesNonAutocompleteTextAlone() {
         XCTAssertEqual(
             ASRService.applyTerminalLiteralAutocompleteSpacing(
@@ -771,6 +694,452 @@ final class DictationE2ETests: XCTestCase {
 
         XCTAssertEqual(entries.map(\.replacement), ["FluidVoice", "Existing"])
         XCTAssertEqual(entries.first?.triggers, ["fluid voice"])
+    }
+
+    func testManualDictionaryEntryParsesCommaSeparatedVariants() {
+        XCTAssertEqual(
+            CustomDictionaryManualEntry.normalizedDraftTriggers("fluid voice, fluid boys, fluid voice"),
+            ["fluid voice", "fluid boys"]
+        )
+    }
+
+    func testManualDictionaryEntryPreservesLiteralCommas() {
+        XCTAssertEqual(CustomDictionaryManualEntry.normalizedDraftTriggers(","), [","])
+        XCTAssertEqual(CustomDictionaryManualEntry.normalizedDraftTriggers(",,"), [",,"])
+    }
+
+    func testAutomaticDictionaryCorrectionDetectsEditedWordInsideDictation() {
+        let before = "Notes: I met Barad yesterday."
+        let after = "Notes: I met Barath yesterday."
+        let insertedRange = (before as NSString).range(of: "I met Barad yesterday.")
+
+        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        )
+
+        XCTAssertEqual(candidate?.heardText, "Barad")
+        XCTAssertEqual(candidate?.correctedText, "Barath")
+    }
+
+    func testAutomaticDictionaryCorrectionDetectsInsertionOnlySpellingFix() {
+        let before = "Barat joined the call"
+        let after = "Barath joined the call"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        )
+
+        XCTAssertEqual(candidate?.heardText, "Barat")
+        XCTAssertEqual(candidate?.correctedText, "Barath")
+    }
+
+    func testAutomaticDictionaryCorrectionDetectsInsertionAtDictationEnd() {
+        let before = "Barat"
+        let after = "Barath"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+        let change = AutomaticDictionaryCorrectionDetector.textChange(before: before, after: after)
+
+        XCTAssertNotNil(change)
+        if let change {
+            XCTAssertTrue(AutomaticDictionaryCorrectionDetector.isWordContinuationAtInsertedRangeEnd(
+                change,
+                after: after,
+                insertedRange: insertedRange
+            ))
+        }
+        let candidate = AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange,
+            allowsInsertionAtEnd: true
+        )
+        XCTAssertEqual(candidate?.heardText, "Barat")
+        XCTAssertEqual(candidate?.correctedText, "Barath")
+    }
+
+    func testAutomaticDictionaryCorrectionRejectsNewWordAtDictationEnd() {
+        let before = "FluidVoice works"
+        let after = "FluidVoice works well"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+        let change = AutomaticDictionaryCorrectionDetector.textChange(before: before, after: after)
+
+        XCTAssertNotNil(change)
+        if let change {
+            XCTAssertFalse(AutomaticDictionaryCorrectionDetector.isWordContinuationAtInsertedRangeEnd(
+                change,
+                after: after,
+                insertedRange: insertedRange
+            ))
+        }
+    }
+
+    func testPronunciationReplacementPreservesPunctuationAndSpacing() {
+        let replacements = [
+            FluidAudioProvider.PronunciationTextReplacement(wordRange: 1...1, label: "Barath"),
+        ]
+
+        XCTAssertEqual(
+            FluidAudioProvider.applyingPronunciationReplacements(
+                to: "Hi,  Barad! How are you?",
+                wordTexts: ["Hi,", "Barad!", "How", "are", "you?"],
+                replacements: replacements
+            ),
+            "Hi,  Barath! How are you?"
+        )
+    }
+
+    func testPronunciationStoreRejectsInconsistentEnrollments() async {
+        let store = PronunciationDictionaryStore()
+        let enrollments = [
+            PronunciationEnrollmentCapture(values: [1, 2], sourceFrameCount: 1, modelKey: "model-a"),
+            PronunciationEnrollmentCapture(values: [1], sourceFrameCount: 1, modelKey: "model-b"),
+        ]
+
+        do {
+            try await store.upsert(
+                dictionaryEntryID: UUID(),
+                label: "Barath",
+                modelKey: "model-a",
+                enrollments: enrollments
+            )
+            XCTFail("Expected inconsistent enrollment validation to fail")
+        } catch {
+            XCTAssertEqual(error as? PronunciationDictionaryStoreError, .inconsistentEnrollment)
+        }
+    }
+
+    func testPronunciationStoreRetainsPriorEnrollmentsWhenRetrained() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PronunciationStore-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let store = PronunciationDictionaryStore(fileURL: fileURL)
+        let entryID = UUID()
+
+        let initialEnrollments = (0 ..< 8).map { value in
+            PronunciationEnrollmentCapture(
+                values: [Float(value), Float(value)],
+                sourceFrameCount: 1,
+                modelKey: "model-a"
+            )
+        }
+        let retrainedEnrollments = (8 ..< 13).map { value in
+            PronunciationEnrollmentCapture(
+                values: [Float(value), Float(value)],
+                sourceFrameCount: 1,
+                modelKey: "model-a"
+            )
+        }
+
+        try await store.upsert(
+            dictionaryEntryID: entryID,
+            label: "Barath",
+            modelKey: "model-a",
+            enrollments: initialEnrollments
+        )
+        try await store.upsert(
+            dictionaryEntryID: entryID,
+            label: "Barath",
+            modelKey: "model-a",
+            enrollments: retrainedEnrollments
+        )
+
+        let profiles = await store.profiles(modelKey: "model-a")
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertEqual(profiles.first?.enrollments.compactMap(\.values.first), (3 ..< 13).map { Float($0) })
+    }
+
+    func testPronunciationStoreRestoreRejectsMalformedProfiles() async {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PronunciationStore-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let store = PronunciationDictionaryStore(fileURL: fileURL)
+        let malformedProfile = PronunciationDictionaryProfile(
+            dictionaryEntryID: UUID(),
+            label: "Barath",
+            modelKey: "model-a",
+            hiddenSize: 2,
+            enrollments: [PronunciationEnrollmentCapture(values: [1], sourceFrameCount: 1, modelKey: "model-a")]
+        )
+
+        do {
+            try await store.replaceAllProfiles([malformedProfile])
+            XCTFail("Expected malformed profile validation to fail")
+        } catch {
+            XCTAssertEqual(error as? PronunciationDictionaryStoreError, .inconsistentEnrollment)
+        }
+    }
+
+    func testPronunciationProfileEditPolicyDiscardsProfileWhenMeaningChanges() {
+        XCTAssertTrue(
+            PronunciationProfileEditPolicy.shouldDiscardProfile(
+                previousReplacement: "Barath",
+                updatedReplacement: "FluidVoice"
+            )
+        )
+        XCTAssertFalse(
+            PronunciationProfileEditPolicy.shouldDiscardProfile(
+                previousReplacement: "Barath",
+                updatedReplacement: "BARATH"
+            )
+        )
+    }
+
+    func testPronunciationMatchingRequiresSupportedAppleSiliconModel() {
+        #if arch(arm64)
+        XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDT.supportsPronunciationMatching)
+        XCTAssertTrue(SettingsStore.SpeechModel.parakeetTDTv2.supportsPronunciationMatching)
+        #else
+        XCTAssertFalse(SettingsStore.SpeechModel.parakeetTDT.supportsPronunciationMatching)
+        XCTAssertFalse(SettingsStore.SpeechModel.parakeetTDTv2.supportsPronunciationMatching)
+        #endif
+        XCTAssertFalse(SettingsStore.SpeechModel.whisperLargeTurbo.supportsPronunciationMatching)
+        XCTAssertFalse(SettingsStore.SpeechModel.cohereTranscribeSixBit.supportsPronunciationMatching)
+    }
+
+    func testDictionaryTrainingAudioCursorResetsAfterBufferGenerationChange() {
+        var cursor = DictionaryTrainingAudioCursor(generation: 4)
+        cursor.consume(1_600)
+        cursor.synchronize(generation: 4)
+        XCTAssertEqual(cursor.sampleOffset, 1_600)
+
+        cursor.synchronize(generation: 5)
+        XCTAssertEqual(cursor.sampleOffset, 0)
+    }
+
+    func testProgressiveDownloaderRetainsFileByMovingIt() throws {
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FluidVoiceDownloadSource-\(UUID().uuidString)")
+        try Data([1, 2, 3]).write(to: source)
+        let retained = try ProgressiveFileDownloader.retainDownloadedFile(at: source)
+        defer { try? FileManager.default.removeItem(at: retained) }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try Data(contentsOf: retained), Data([1, 2, 3]))
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresTypingAfterDictation() {
+        let before = "FluidVoice works"
+        let after = "FluidVoice works well"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionAllowsContinuedCorrectionAtRangeEnd() {
+        let change = AutomaticDictionaryTextChange(
+            oldRange: NSRange(location: 5, length: 0),
+            newRange: NSRange(location: 5, length: 1)
+        )
+        let insertedRange = NSRange(location: 0, length: 5)
+
+        XCTAssertFalse(AutomaticDictionaryCorrectionDetector.isChangeInsideInsertedRange(
+            change,
+            insertedRange: insertedRange
+        ))
+        XCTAssertTrue(AutomaticDictionaryCorrectionDetector.isChangeInsideInsertedRange(
+            change,
+            insertedRange: insertedRange,
+            allowsInsertionAtEnd: true
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionKeepsWaitingWhileCaretTouchesCorrectedWord() {
+        let correctedRange = NSRange(location: 8, length: 6)
+
+        XCTAssertTrue(AutomaticDictionaryCorrectionDetector.selectionTouchesCandidate(
+            NSRange(location: 14, length: 0),
+            candidateRange: correctedRange
+        ))
+        XCTAssertFalse(AutomaticDictionaryCorrectionDetector.selectionTouchesCandidate(
+            NSRange(location: 15, length: 0),
+            candidateRange: correctedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionTreatsSpaceAfterWordAsCompletion() {
+        let change = AutomaticDictionaryTextChange(
+            oldRange: NSRange(location: 6, length: 0),
+            newRange: NSRange(location: 6, length: 1)
+        )
+        let correctedRange = NSRange(location: 0, length: 6)
+
+        XCTAssertFalse(AutomaticDictionaryCorrectionDetector.changeContinuesCandidate(
+            change,
+            after: "Barath ",
+            candidateRange: correctedRange
+        ))
+        XCTAssertTrue(AutomaticDictionaryCorrectionDetector.changeContinuesCandidate(
+            change,
+            after: "Baratha",
+            candidateRange: correctedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresEditOutsideDictation() {
+        let before = "Title: I met Barad"
+        let after = "Heading: I met Barad"
+        let insertedRange = (before as NSString).range(of: "I met Barad")
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresCaseOnlyEdit() {
+        let before = "fluidvoice"
+        let after = "FluidVoice"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresPunctuationAndSpacingOnlyEdit() {
+        let before = "Use Fluid-Voice today"
+        let after = "Use Fluid Voice today"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
+    func testAutomaticDictionaryCorrectionIgnoresSingleCharacterCorrection() {
+        let before = "Choose k today"
+        let after = "Choose okay today"
+        let insertedRange = NSRange(location: 0, length: (before as NSString).length)
+
+        XCTAssertNil(AutomaticDictionaryCorrectionDetector.candidate(
+            before: before,
+            after: after,
+            insertedRange: insertedRange
+        ))
+    }
+
+    func testAutomaticDictionarySuggestionRequiresRepeatedCorrection() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        var configuration = DictionarySuggestionPolicyConfig()
+        configuration.globalCooldown = 0
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
+        let now = Date(timeIntervalSince1970: 1000)
+
+        XCTAssertFalse(policy.shouldShow(candidate, now: now))
+        XCTAssertTrue(policy.shouldShow(candidate, now: now.addingTimeInterval(60)))
+    }
+
+    func testAutomaticDictionarySuggestionPersistsDismissalCooldown() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        var configuration = DictionarySuggestionPolicyConfig()
+        configuration.requiredOccurrences = 1
+        configuration.globalCooldown = 0
+        configuration.dismissedPairCooldown = 100
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
+        let now = Date(timeIntervalSince1970: 2000)
+
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        XCTAssertTrue(policy.shouldShow(candidate, now: now))
+        policy.markShown(candidate, now: now)
+        policy.record(.dismissed, for: candidate, now: now)
+
+        let restoredPolicy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        XCTAssertFalse(restoredPolicy.shouldShow(candidate, now: now.addingTimeInterval(50)))
+        XCTAssertTrue(restoredPolicy.shouldShow(candidate, now: now.addingTimeInterval(101)))
+    }
+
+    func testAutomaticDictionarySuggestionAppliesGlobalCooldown() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        var configuration = DictionarySuggestionPolicyConfig()
+        configuration.requiredOccurrences = 1
+        configuration.globalCooldown = 600
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        let first = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
+        let second = AutomaticDictionaryCorrectionCandidate(heardText: "Floral Voice", correctedText: "FluidVoice")
+        let now = Date(timeIntervalSince1970: 3000)
+
+        XCTAssertTrue(policy.shouldShow(first, now: now))
+        policy.markShown(first, now: now)
+        XCTAssertFalse(policy.shouldShow(second, now: now.addingTimeInterval(60)))
+        XCTAssertTrue(policy.shouldShow(second, now: now.addingTimeInterval(601)))
+    }
+
+    func testAutomaticDictionarySuggestionStopsAfterSessionIgnoreLimit() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        var configuration = DictionarySuggestionPolicyConfig()
+        configuration.requiredOccurrences = 1
+        configuration.globalCooldown = 0
+        configuration.dismissedPairCooldown = 0
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        let now = Date(timeIntervalSince1970: 4000)
+
+        for index in 0..<configuration.maximumSessionIgnores {
+            let candidate = AutomaticDictionaryCorrectionCandidate(
+                heardText: "heard \(index)",
+                correctedText: "corrected \(index)"
+            )
+            XCTAssertTrue(policy.shouldShow(candidate, now: now.addingTimeInterval(Double(index))))
+            policy.markShown(candidate, now: now.addingTimeInterval(Double(index)))
+            policy.record(.timedOut, for: candidate, now: now.addingTimeInterval(Double(index)))
+        }
+
+        let next = AutomaticDictionaryCorrectionCandidate(heardText: "another error", correctedText: "another word")
+        XCTAssertFalse(policy.shouldShow(next, now: now.addingTimeInterval(10)))
+    }
+
+    func testAutomaticDictionarySuggestionNeverReturnsAfterAcceptance() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        var configuration = DictionarySuggestionPolicyConfig()
+        configuration.requiredOccurrences = 1
+        configuration.globalCooldown = 0
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
+        let now = Date(timeIntervalSince1970: 5000)
+
+        XCTAssertTrue(policy.shouldShow(candidate, now: now))
+        policy.record(.accepted, for: candidate, now: now)
+        XCTAssertFalse(policy.shouldShow(candidate, now: now.addingTimeInterval(10_000)))
+    }
+
+    func testAutomaticDictionarySuggestionStopsAfterPairDismissalLimit() throws {
+        let defaults = try self.makeSuggestionPolicyDefaults()
+        var configuration = DictionarySuggestionPolicyConfig()
+        configuration.requiredOccurrences = 1
+        configuration.globalCooldown = 0
+        configuration.dismissedPairCooldown = 0
+        configuration.maximumSessionIgnores = 10
+        let policy = AutomaticDictionarySuggestionPolicy(defaults: defaults, configuration: configuration)
+        let candidate = AutomaticDictionaryCorrectionCandidate(heardText: "Barad", correctedText: "Barath")
+        let now = Date(timeIntervalSince1970: 6000)
+
+        for index in 0..<configuration.maximumPairDismissals {
+            let date = now.addingTimeInterval(Double(index))
+            XCTAssertTrue(policy.shouldShow(candidate, now: date))
+            policy.record(.dismissed, for: candidate, now: date)
+        }
+        XCTAssertFalse(policy.shouldShow(candidate, now: now.addingTimeInterval(10)))
+    }
+
+    private func makeSuggestionPolicyDefaults() throws -> UserDefaults {
+        let suiteName = "AutomaticDictionarySuggestionPolicyTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
     }
 
     func testDictionaryTransferImport_rejectsInvalidReplacementTriggerType() {
@@ -1147,6 +1516,215 @@ final class DictationE2ETests: XCTestCase {
         }
     }
 
+    func testAppleIntelligenceIsNotAvailableAsABuiltInProvider() {
+        XCTAssertFalse(ModelRepository.builtInProviderIDs.contains("apple-intelligence"))
+        XCTAssertFalse(ModelRepository.shared.builtInProvidersList().contains { $0.id.contains("apple-intelligence") })
+    }
+
+    func testRetiredAppleIntelligenceStateIsPurgedWithoutSelectingAFallbackProvider() {
+        self.withRestoredDefaults(
+            keys: [
+                self.selectedProviderIDKey,
+                self.selectedAIModelKey,
+                self.availableModelsByProviderKey,
+                self.selectedModelByProviderKey,
+                self.verifiedProviderFingerprintsKey,
+                self.commandModeSelectedProviderIDKey,
+                self.commandModeSelectedModelKey,
+                self.rewriteModeSelectedProviderIDKey,
+                self.rewriteModeSelectedModelKey,
+                self.dictationPromptConfigurationsKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            let shortcut = HotkeyShortcut(keyCode: 1, modifierFlags: [.command])
+            settings.selectedProviderID = "apple-intelligence"
+            settings.selectedModel = "System Model"
+            settings.availableModelsByProvider = ["apple-intelligence": ["System Model"]]
+            settings.selectedModelByProvider = ["apple-intelligence": "System Model"]
+            settings.verifiedProviderFingerprints = ["apple-intelligence": "apple-intelligence"]
+            settings.commandModeSelectedProviderID = "apple-intelligence-disabled"
+            settings.commandModeSelectedModel = "System Model"
+            settings.rewriteModeSelectedProviderID = "apple-intelligence"
+            settings.rewriteModeSelectedModel = "System Model"
+            settings.dictationPromptConfigurations = [
+                "__default__": SettingsStore.DictationPromptConfiguration(
+                    shortcut: shortcut,
+                    providerID: "apple-intelligence",
+                    modelName: "System Model"
+                ),
+            ]
+
+            settings.purgeRetiredAppleIntelligenceState()
+            settings.purgeRetiredAppleIntelligenceState()
+
+            XCTAssertEqual(settings.selectedProviderID, "")
+            XCTAssertNil(settings.selectedModel)
+            XCTAssertEqual(settings.commandModeSelectedProviderID, "")
+            XCTAssertNil(settings.commandModeSelectedModel)
+            XCTAssertEqual(settings.rewriteModeSelectedProviderID, "")
+            XCTAssertNil(settings.rewriteModeSelectedModel)
+            XCTAssertNil(settings.availableModelsByProvider["apple-intelligence"])
+            XCTAssertNil(settings.selectedModelByProvider["apple-intelligence"])
+            XCTAssertNil(settings.verifiedProviderFingerprints["apple-intelligence"])
+            XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.shortcut, shortcut)
+            XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.providerID, "")
+            XCTAssertEqual(settings.dictationPromptConfigurations["__default__"]?.modelName, "")
+            XCTAssertFalse(DictationAIPostProcessingGate.isProviderConfigured())
+        }
+    }
+
+    func testDictationProviderRouteUsesPromptConfigurationWithoutMutatingGlobalSelection() {
+        self.withRestoredDefaults(
+            keys: [
+                self.selectedProviderIDKey,
+                self.selectedModelByProviderKey,
+                self.verifiedProviderFingerprintsKey,
+                self.dictationPromptConfigurationsKey,
+                self.dictationPromptOffKey,
+                self.selectedDictationPromptIDKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            settings.selectedProviderID = "openai"
+            settings.selectedModelByProvider = ["openai": "gpt-4.1", "ollama": "test-local-model"]
+            settings.verifiedProviderFingerprints = [
+                "ollama": DictationAIPostProcessingGate.providerFingerprint(
+                    baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"),
+                    apiKey: ""
+                ) ?? "",
+            ]
+            settings.setDictationPromptSelection(.default, for: .primary)
+            settings.setDictationPromptConfiguration(
+                SettingsStore.DictationPromptConfiguration(
+                    providerID: "ollama",
+                    modelName: "test-local-model"
+                ),
+                for: .default
+            )
+
+            let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary)
+
+            XCTAssertEqual(route.providerID, "ollama")
+            XCTAssertEqual(route.providerKey, "ollama")
+            XCTAssertEqual(route.model, "test-local-model")
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+            XCTAssertEqual(settings.selectedModelByProvider["openai"], "gpt-4.1")
+
+            XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary))
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+        }
+    }
+
+    func testDictationProviderRouteReturnsEmptyRouteForUnverifiedPrivateAI() {
+        self.withPromptAndProviderSettingsRestored {
+            let settings = SettingsStore.shared
+            settings.verifiedProviderFingerprints = [:]
+
+            let route = DictationProviderRoute.privateAIRoute(settings: settings)
+
+            XCTAssertEqual(
+                route,
+                DictationProviderRoute(providerID: "", providerKey: "", baseURL: "", model: "", apiKey: "")
+            )
+            XCTAssertFalse(route.usesPrivateAI)
+        }
+    }
+
+    func testDictationProviderRouteUsesAppBoundPromptConfiguration() {
+        self.withRestoredDefaults(
+            keys: [
+                self.dictationPromptProfilesKey,
+                self.appPromptBindingsKey,
+                self.dictationPromptRoutingScopeKey,
+                self.selectedProviderIDKey,
+                self.selectedModelByProviderKey,
+                self.verifiedProviderFingerprintsKey,
+                self.dictationPromptConfigurationsKey,
+                self.dictationPromptOffKey,
+                self.selectedDictationPromptIDKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            let appBundleID = "com.example.editor"
+            let profile = SettingsStore.DictationPromptProfile(
+                name: "Editor",
+                prompt: "Clean up text for this editor.",
+                mode: .dictate
+            )
+            settings.dictationPromptProfiles = [profile]
+            settings.appPromptBindings = [
+                SettingsStore.AppPromptBinding(
+                    mode: .dictate,
+                    appBundleID: appBundleID,
+                    appName: "Editor",
+                    promptID: profile.id
+                ),
+            ]
+            settings.dictationPromptRoutingScope = .allApps
+            settings.selectedProviderID = "openai"
+            settings.selectedModelByProvider = ["openai": "gpt-4.1", "ollama": "editor-model"]
+            settings.verifiedProviderFingerprints = [
+                "ollama": DictationAIPostProcessingGate.providerFingerprint(
+                    baseURL: ModelRepository.shared.defaultBaseURL(for: "ollama"),
+                    apiKey: ""
+                ) ?? "",
+            ]
+            settings.setDictationPromptSelection(.default, for: .primary)
+            settings.setDictationPromptConfiguration(
+                SettingsStore.DictationPromptConfiguration(
+                    providerID: "openai",
+                    modelName: "gpt-4.1"
+                ),
+                for: .default
+            )
+            settings.setDictationPromptConfiguration(
+                SettingsStore.DictationPromptConfiguration(
+                    providerID: "ollama",
+                    modelName: "editor-model"
+                ),
+                for: .profile(profile.id)
+            )
+
+            let route = DictationProviderRoute.resolve(
+                settings: settings,
+                dictationSlot: .primary,
+                appBundleID: appBundleID
+            )
+
+            XCTAssertEqual(route.providerID, "ollama")
+            XCTAssertEqual(route.model, "editor-model")
+            XCTAssertEqual(settings.selectedProviderID, "openai")
+            XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appBundleID))
+        }
+    }
+
+    func testPostProcessingRouteUsesGlobalProviderWithoutAppContext() {
+        self.withRestoredDefaults(
+            keys: [
+                self.dictationPromptRoutingScopeKey,
+                self.selectedProviderIDKey,
+                self.selectedModelByProviderKey,
+                self.dictationPromptOffKey,
+                self.selectedDictationPromptIDKey,
+            ]
+        ) {
+            let settings = SettingsStore.shared
+            settings.dictationPromptRoutingScope = .selectedAppsOnly
+            settings.selectedProviderID = "openai"
+            settings.selectedModelByProvider = ["openai": "gpt-4.1"]
+            settings.setDictationPromptSelection(.default, for: .primary)
+
+            let route = DictationProviderRoute.resolveForPostProcessing(
+                settings: settings,
+                dictationSlot: .primary
+            )
+
+            XCTAssertEqual(route.providerID, "openai")
+            XCTAssertEqual(route.model, "gpt-4.1")
+        }
+    }
+
     func testPrivateAIProviderDictationPromptSelection_allowsOffAndRestoresNonFluidPrompt() {
         self.withPromptAndProviderSettingsRestored {
             let settings = SettingsStore.shared
@@ -1316,6 +1894,106 @@ final class DictationE2ETests: XCTestCase {
                 PrivateFeatures.privateAIProvider
             )
             XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: nil))
+        }
+    }
+
+    func testMLXUpgradeOfferOnlyTargetsLegacyAppleSiliconInstalls() {
+        let eligible = PrivateAIMLXUpgradeCoordinator.shouldOffer(
+            hasPrivateProvider: true,
+            isAppleSilicon: true,
+            appVersion: "1.6.3",
+            backendPreferenceWasSet: false,
+            hasLegacyLlamaModel: true,
+            hasMLXModel: false,
+            offerWasHandled: false
+        )
+        XCTAssertTrue(eligible)
+
+        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
+            hasPrivateProvider: true,
+            isAppleSilicon: false,
+            appVersion: "1.6.3",
+            backendPreferenceWasSet: false,
+            hasLegacyLlamaModel: true,
+            hasMLXModel: false,
+            offerWasHandled: false
+        ))
+        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
+            hasPrivateProvider: true,
+            isAppleSilicon: true,
+            appVersion: "1.6.3",
+            backendPreferenceWasSet: true,
+            hasLegacyLlamaModel: true,
+            hasMLXModel: false,
+            offerWasHandled: false
+        ))
+        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
+            hasPrivateProvider: true,
+            isAppleSilicon: true,
+            appVersion: "1.6.3",
+            backendPreferenceWasSet: false,
+            hasLegacyLlamaModel: false,
+            hasMLXModel: false,
+            offerWasHandled: false
+        ))
+        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
+            hasPrivateProvider: true,
+            isAppleSilicon: true,
+            appVersion: "1.6.3",
+            backendPreferenceWasSet: false,
+            hasLegacyLlamaModel: true,
+            hasMLXModel: true,
+            offerWasHandled: false
+        ))
+        XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
+            hasPrivateProvider: true,
+            isAppleSilicon: true,
+            appVersion: "1.6.3",
+            backendPreferenceWasSet: false,
+            hasLegacyLlamaModel: true,
+            hasMLXModel: false,
+            offerWasHandled: true
+        ))
+        for version in ["1.6.2", "1.6.4", "2.0.0", ""] {
+            XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldOffer(
+                hasPrivateProvider: true,
+                isAppleSilicon: true,
+                appVersion: version,
+                backendPreferenceWasSet: false,
+                hasLegacyLlamaModel: true,
+                hasMLXModel: false,
+                offerWasHandled: false
+            ))
+        }
+    }
+
+    func testMLXUpgradePreparedOfferIsRevalidatedBeforeResuming() {
+        XCTAssertTrue(PrivateAIMLXUpgradeCoordinator.shouldResumePreparedOffer(
+            hasPrivateProvider: true,
+            isAppleSilicon: true,
+            appVersion: "1.6.3",
+            backendPreference: .llama,
+            hasLegacyLlamaModel: true,
+            hasMLXModel: false
+        ))
+
+        for state in [
+            (true, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.mlx, true, false),
+            (true, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, false, false),
+            (true, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, true, true),
+            (true, true, "1.6.4", SettingsStore.PrivateAIBackendPreference.llama, true, false),
+            (true, false, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, true, false),
+            (false, true, "1.6.3", SettingsStore.PrivateAIBackendPreference.llama, true, false),
+            (true, true, "1.6.3", nil, true, false),
+        ] {
+            XCTAssertFalse(PrivateAIMLXUpgradeCoordinator.shouldResumePreparedOffer(
+                hasPrivateProvider: state.0,
+                isAppleSilicon: state.1,
+                appVersion: state.2,
+                backendPreference: state.3,
+                hasLegacyLlamaModel: state.4,
+                hasMLXModel: state.5
+            ))
         }
     }
 
@@ -1664,6 +2342,7 @@ final class DictationE2ETests: XCTestCase {
                 self.selectedProviderIDKey,
                 self.availableModelsByProviderKey,
                 self.selectedModelByProviderKey,
+                self.verifiedProviderFingerprintsKey,
                 self.privateAISelectedModelIDKey,
             ],
             run: run

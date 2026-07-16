@@ -41,7 +41,7 @@ final class SettingsStore: ObservableObject {
         self.migrateSecondaryPromptShortcutIfNeeded()
         self.retireLegacySecondaryPromptShortcutIfNeeded()
         self.normalizePromptSelectionsIfNeeded()
-        self.normalizeProviderSelectionForCurrentVerificationState()
+        self.purgeRetiredAppleIntelligenceState()
         self.repairForcedOnboardingResetIfNeeded()
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
@@ -1474,14 +1474,55 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// No-op: never override the user's provider selection on launch.
-    ///
-    /// The per-prompt shortcut system means the global default provider is no longer the
-    /// authoritative routing source — each shortcut can bind to its own provider/model, or be off.
-    /// The only time we set a provider is during onboarding (Fluid Intelligence flow); after that
-    /// the selection is sticky across restarts and updates. Default is off (empty).
-    func normalizeProviderSelectionForCurrentVerificationState() {
-        // Intentionally empty. Selection is sticky.
+    func purgeRetiredAppleIntelligenceState() {
+        let retiredProviderIDs = Set(["apple-intelligence", "apple-intelligence-disabled"])
+        let rawSelectedProviderID = self.defaults.string(forKey: Keys.selectedProviderID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let rawSelectedProviderID, retiredProviderIDs.contains(rawSelectedProviderID) {
+            self.selectedProviderID = ""
+            self.selectedModel = nil
+        }
+
+        if retiredProviderIDs.contains(self.commandModeSelectedProviderID) {
+            self.commandModeSelectedProviderID = ""
+            self.commandModeSelectedModel = nil
+        }
+        if retiredProviderIDs.contains(self.rewriteModeSelectedProviderID) {
+            self.rewriteModeSelectedProviderID = ""
+            self.rewriteModeSelectedModel = nil
+        }
+
+        var fingerprints = self.verifiedProviderFingerprints
+        var availableModels = self.availableModelsByProvider
+        var selectedModels = self.selectedModelByProvider
+        for providerID in retiredProviderIDs {
+            fingerprints.removeValue(forKey: providerID)
+            availableModels.removeValue(forKey: providerID)
+            selectedModels.removeValue(forKey: providerID)
+            fingerprints.removeValue(forKey: "custom:\(providerID)")
+            availableModels.removeValue(forKey: "custom:\(providerID)")
+            selectedModels.removeValue(forKey: "custom:\(providerID)")
+        }
+        if fingerprints != self.verifiedProviderFingerprints {
+            self.verifiedProviderFingerprints = fingerprints
+        }
+        if availableModels != self.availableModelsByProvider {
+            self.availableModelsByProvider = availableModels
+        }
+        if selectedModels != self.selectedModelByProvider {
+            self.selectedModelByProvider = selectedModels
+        }
+
+        let configurations = self.dictationPromptConfigurations.compactMapValues { configuration in
+            let providerID = configuration.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard retiredProviderIDs.contains(providerID) else { return configuration }
+            guard configuration.shortcut != nil else { return nil }
+            return DictationPromptConfiguration(shortcut: configuration.shortcut)
+        }
+        if configurations != self.dictationPromptConfigurations {
+            self.dictationPromptConfigurations = configurations
+        }
     }
 
     var privateAIPrefixKVCacheEnabled: Bool {
@@ -1573,10 +1614,7 @@ final class SettingsStore: ObservableObject {
     var isAIConfigured: Bool {
         let providerID = self.selectedProviderID
 
-        // 1. Apple Intelligence is always considered configured
-        if providerID == "apple-intelligence" { return true }
-
-        // 2. Get base URL to check for local endpoints
+        // Get base URL to check for local endpoints
         var baseURL = ""
         if let saved = self.savedProviders.first(where: { $0.id == providerID }) {
             baseURL = saved.baseURL
@@ -1586,7 +1624,7 @@ final class SettingsStore: ObservableObject {
 
         let isLocal = ModelRepository.shared.isLocalEndpoint(baseURL)
 
-        // 3. Check for API key and selected model
+        // Check for API key and selected model
         let key = self.canonicalProviderKey(for: providerID)
         let hasApiKey = !(self.providerAPIKeys[key]?.isEmpty ?? true)
 
@@ -1726,6 +1764,11 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.experimentalDirectAudioCaptureEnabled)
         }
+    }
+
+    var directAudioCaptureConsecutiveFailures: Int {
+        get { self.defaults.integer(forKey: Keys.directAudioCaptureConsecutiveFailures) }
+        set { self.defaults.set(max(0, newValue), forKey: Keys.directAudioCaptureConsecutiveFailures) }
     }
 
     var copyTranscriptionToClipboard: Bool {
@@ -2976,6 +3019,7 @@ final class SettingsStore: ObservableObject {
             fillerWords: self.fillerWords,
             removeFillerWordsEnabled: self.removeFillerWordsEnabled,
             autoConvertPunctuationEnabled: self.autoConvertPunctuationEnabled,
+            literalDictationFormattingEnabled: self.literalDictationFormattingEnabled,
             punctuationDictionaryPrefix: self.punctuationDictionaryPrefix,
             punctuationDictionaryRules: self.punctuationDictionaryRules,
             gaavModeEnabled: self.gaavModeEnabled,
@@ -2985,6 +3029,8 @@ final class SettingsStore: ObservableObject {
             continuousDictationSpacingEnabled: self.continuousDictationSpacingEnabled,
             contextAwareCapitalizationEnabled: self.contextAwareCapitalizationEnabled,
             pauseMediaDuringTranscription: self.pauseMediaDuringTranscription,
+            automaticDictionaryLearningEnabled: self.automaticDictionaryLearningEnabled,
+            pronunciationMatchingEnabled: self.pronunciationMatchingEnabled,
             vocabularyBoostingEnabled: self.vocabularyBoostingEnabled,
             customDictionaryEntries: self.customDictionaryEntries,
             selectedDictationPromptID: self.selectedDictationPromptID,
@@ -3094,6 +3140,9 @@ final class SettingsStore: ObservableObject {
         if let autoConvertPunctuationEnabled = payload.autoConvertPunctuationEnabled {
             self.autoConvertPunctuationEnabled = autoConvertPunctuationEnabled
         }
+        if let literalDictationFormattingEnabled = payload.literalDictationFormattingEnabled {
+            self.literalDictationFormattingEnabled = literalDictationFormattingEnabled
+        }
         if let punctuationDictionaryPrefix = payload.punctuationDictionaryPrefix {
             self.punctuationDictionaryPrefix = punctuationDictionaryPrefix
         }
@@ -3109,6 +3158,12 @@ final class SettingsStore: ObservableObject {
         self.continuousDictationSpacingEnabled = payload.continuousDictationSpacingEnabled ?? restoredContinuousDictationModeEnabled
         self.contextAwareCapitalizationEnabled = payload.contextAwareCapitalizationEnabled ?? restoredContinuousDictationModeEnabled
         self.pauseMediaDuringTranscription = payload.pauseMediaDuringTranscription
+        if let automaticDictionaryLearningEnabled = payload.automaticDictionaryLearningEnabled {
+            self.automaticDictionaryLearningEnabled = automaticDictionaryLearningEnabled
+        }
+        if let pronunciationMatchingEnabled = payload.pronunciationMatchingEnabled {
+            self.pronunciationMatchingEnabled = pronunciationMatchingEnabled
+        }
         self.vocabularyBoostingEnabled = payload.vocabularyBoostingEnabled
         self.customDictionaryEntries = payload.customDictionaryEntries
 
@@ -3125,6 +3180,7 @@ final class SettingsStore: ObservableObject {
         self.promptModeSelectedPromptID = payload.promptModeSelectedPromptID
         self.isSecondaryDictationPromptOff = payload.secondaryDictationPromptOff ?? false
         self.normalizePromptSelectionsIfNeeded()
+        self.purgeRetiredAppleIntelligenceState()
     }
 
     // MARK: - Private Methods
@@ -3485,11 +3541,6 @@ final class SettingsStore: ObservableObject {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
-        if trimmed == "apple-intelligence" {
-            return AppleIntelligenceService.isAvailable &&
-                self.verifiedProviderFingerprints[self.canonicalProviderKey(for: trimmed)] == "apple-intelligence"
-        }
-
         if PrivateFeatures.privateAIProvider,
            trimmed == PrivateAIProviderFeature.shared.providerID
         {
@@ -3705,6 +3756,14 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.autoConvertPunctuationEnabled)
+        }
+    }
+
+    var literalDictationFormattingEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.literalDictationFormattingEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.literalDictationFormattingEnabled)
         }
     }
 
@@ -3975,6 +4034,22 @@ final class SettingsStore: ObservableObject {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.vocabularyBoostingEnabled)
             NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+        }
+    }
+
+    var automaticDictionaryLearningEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.automaticDictionaryLearningEnabled)
+        }
+    }
+
+    var pronunciationMatchingEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.pronunciationMatchingEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.pronunciationMatchingEnabled)
         }
     }
 
@@ -4460,6 +4535,19 @@ final class SettingsStore: ObservableObject {
             }
         }
 
+        var supportsPronunciationMatching: Bool {
+            #if arch(arm64)
+            switch self {
+            case .parakeetTDT, .parakeetTDTv2:
+                return true
+            default:
+                return false
+            }
+            #else
+            return false
+            #endif
+        }
+
         /// Preview update cadence for real-time transcription.
         /// Models without native incremental decoding should use a slower interval.
         var streamingPreviewIntervalSeconds: Double {
@@ -4772,6 +4860,7 @@ private extension SettingsStore {
         static let enableStreamingPreview = "EnableStreamingPreview"
         static let enableAIStreaming = "EnableAIStreaming"
         static let experimentalDirectAudioCaptureEnabled = "ExperimentalDirectAudioCaptureEnabled"
+        static let directAudioCaptureConsecutiveFailures = "DirectAudioCaptureConsecutiveFailures"
         static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
         static let textInsertionMode = "TextInsertionMode"
         static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
@@ -4834,6 +4923,7 @@ private extension SettingsStore {
         static let fillerWords = "FillerWords"
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
         static let autoConvertPunctuationEnabled = "AutoConvertPunctuationEnabled"
+        static let literalDictationFormattingEnabled = "LiteralDictationFormattingEnabled"
         static let punctuationDictionaryPrefix = "PunctuationDictionaryPrefix"
         static let punctuationDictionaryRules = "PunctuationDictionaryRules"
 
@@ -4849,7 +4939,9 @@ private extension SettingsStore {
 
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"
+        static let automaticDictionaryLearningEnabled = "AutomaticDictionaryLearningEnabled"
         static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
+        static let pronunciationMatchingEnabled = "PronunciationMatchingEnabled"
 
         // Transcription Provider (ASR)
         static let selectedTranscriptionProvider = "SelectedTranscriptionProvider"

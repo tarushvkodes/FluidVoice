@@ -56,11 +56,6 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     /// Subscription for forwarding audio levels to expanded command notch
     private var expandedModeAudioSubscription: AnyCancellable?
 
-    override init() {
-        super.init()
-        // Don't setup menu bar immediately - defer until app is ready
-    }
-
     func initializeMenuBar() {
         guard !self.isSetup else { return }
 
@@ -104,6 +99,18 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     private func handleOverlayState(isRunning: Bool, asrService: ASRService) {
         self.overlayBench("handle_state isRunning=\(isRunning) overlayVisible=\(self.overlayVisible) processing=\(self.isProcessingActive) mode=\(self.currentOverlayMode.rawValue)")
+
+        // Dictionary training owns its recording controls, so showing the
+        // regular dictation notch here would create two competing overlays.
+        if asrService.isDictionaryTrainingCaptureActive {
+            self.pendingShowOperation?.cancel()
+            self.pendingShowOperation = nil
+            if self.overlayVisible {
+                self.overlayVisible = false
+                NotchOverlayManager.shared.hide()
+            }
+            return
+        }
 
         // Don't hide the overlay while AI processing is active.
         // Without this, the notch can disappear during the short "Refining..." phase because
@@ -216,6 +223,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     func showRecordingOverlayImmediately() {
+        AutomaticDictionaryCorrectionTracker.shared.cancel()
+
         guard let asrService else {
             self.overlayBench("instant_show_return reason=no_asr_service")
             return

@@ -266,13 +266,15 @@ final class TypingService {
     func typeOutputPlanInstantly(
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
-        textReadyAt: TimeInterval?
+        textReadyAt: TimeInterval?,
+        tracksDictionaryCorrections: Bool = false
     ) {
         self.typeOutputPlanInstantly(
             plan,
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
-            forceReliablePaste: false
+            forceReliablePaste: false,
+            tracksDictionaryCorrections: tracksDictionaryCorrections
         )
     }
 
@@ -284,7 +286,8 @@ final class TypingService {
             .plain(text),
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
-            forceReliablePaste: true
+            forceReliablePaste: true,
+            tracksDictionaryCorrections: false
         )
     }
 
@@ -292,7 +295,8 @@ final class TypingService {
         _ plan: DictationLiteralOutputPlan,
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval?,
-        forceReliablePaste: Bool
+        forceReliablePaste: Bool,
+        tracksDictionaryCorrections: Bool
     ) {
         let requestedAt = ProcessInfo.processInfo.systemUptime
         let text = plan.plainText
@@ -359,6 +363,14 @@ final class TypingService {
             self.bench(
                 "insert_return elapsedMs=\(Self.elapsedMs(since: insertStartedAt)) totalMs=\(Self.elapsedMs(since: requestedAt))"
             )
+            if tracksDictionaryCorrections {
+                Task { @MainActor in
+                    AutomaticDictionaryCorrectionTracker.shared.beginObservingInsertion(
+                        text,
+                        targetPID: preferredTargetPID
+                    )
+                }
+            }
         }
     }
 

@@ -5,6 +5,7 @@ enum AppNavigationDestination {
     case history
 }
 
+@MainActor
 final class AppNavigationRouter {
     static let shared = AppNavigationRouter()
 

@@ -5,6 +5,20 @@ import FluidAudio
 /// TranscriptionProvider implementation using FluidAudio (optimized for Apple Silicon)
 /// This wraps the existing FluidAudio-based ASR for use on Apple Silicon Macs.
 final class FluidAudioProvider: TranscriptionProvider {
+    struct PronunciationTextReplacement {
+        let wordRange: ClosedRange<Int>
+        let label: String
+    }
+
+    static func dictionaryLabels(
+        from entries: [SettingsStore.CustomDictionaryEntry]
+    ) -> [UUID: String] {
+        Dictionary(
+            entries.map { ($0.id, $0.replacement) },
+            uniquingKeysWith: { _, last in last }
+        )
+    }
+
     let name = "FluidAudio (Apple Silicon Optimized)"
 
     /// Whether this provider is supported on the current system.
@@ -22,6 +36,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     private(set) var isWordBoostingActive: Bool = false
     private(set) var boostedVocabularyTermsCount: Int = 0
     private var boostedTermLookup: [String] = []
+    private var pronunciationModelKey = ""
 
     /// Optional model override - if set, uses this model instead of the global setting.
     /// Used for downloading specific models without changing the active selection.
@@ -39,6 +54,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let selectedModel = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
         let asrModelVersion: AsrModelVersion = selectedModel == .parakeetTDTv2 ? .v2 : .v3
         let modelVersion = selectedModel == .parakeetTDTv2 ? "v2" : "v3"
+        self.pronunciationModelKey = "parakeet-\(modelVersion)"
         let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
         let modelCacheDirectory = AsrModels.defaultCacheDirectory(for: asrModelVersion)
         DebugLogger.shared.info(
@@ -200,7 +216,31 @@ final class FluidAudioProvider: TranscriptionProvider {
     }
 
     func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult {
-        try await self.transcribeStreaming(samples)
+        guard let manager = self.streamingAsrManager else {
+            throw NSError(
+                domain: "FluidAudioProvider",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "ASR manager not initialized"]
+            )
+        }
+        let shouldCapture = SettingsStore.shared.pronunciationMatchingEnabled
+        await manager.setPronunciationCustomizationEnabled(shouldCapture)
+        do {
+            let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            let features = await manager.consumePronunciationEncoderFeatures()
+            await manager.setPronunciationCustomizationEnabled(false)
+            return ASRTranscriptionResult(
+                text: result.text,
+                confidence: result.confidence,
+                pronunciationEnrollment: shouldCapture
+                    ? self.makeEnrollment(result: result, features: features)
+                    : nil
+            )
+        } catch {
+            _ = await manager.consumePronunciationEncoderFeatures()
+            await manager.setPronunciationCustomizationEnabled(false)
+            throw error
+        }
     }
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -216,9 +256,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         // manager so the user still gets a transcription (just without CTC rescoring).
         do {
             let startedAt = Date().timeIntervalSince1970
-            let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            let result = try await self.transcribeFinalResult(samples, manager: manager)
             self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: false)
-            return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+            return result
         } catch {
             guard let fallback = self.streamingAsrManager, fallback !== manager else {
                 throw error
@@ -228,10 +268,177 @@ final class FluidAudioProvider: TranscriptionProvider {
                 source: "FluidAudioProvider"
             )
             let startedAt = Date().timeIntervalSince1970
-            let result = try await fallback.transcribe(samples, source: AudioSource.microphone)
+            let result = try await self.transcribeFinalResult(samples, manager: fallback)
             self.logFinalBenchmark(samples: samples, text: result.text, startedAt: startedAt, usedFallback: true)
-            return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+            return result
         }
+    }
+
+    private func transcribeFinalResult(_ samples: [Float], manager: AsrManager) async throws -> ASRTranscriptionResult {
+        let matchingEnabled = SettingsStore.shared.pronunciationMatchingEnabled && samples.count <= 16_000 * 15
+        let dictionaryLabels = Self.dictionaryLabels(
+            from: SettingsStore.shared.customDictionaryEntries
+        )
+        let profiles: [PronunciationDictionaryProfile]
+        if matchingEnabled {
+            let storedProfiles = await PronunciationDictionaryStore.shared.profiles(
+                modelKey: self.pronunciationModelKey
+            )
+            profiles = storedProfiles.compactMap { storedProfile in
+                guard storedProfile.enrollments.count >= 3,
+                      let currentLabel = dictionaryLabels[storedProfile.dictionaryEntryID]
+                else { return nil }
+                var profile = storedProfile
+                profile.label = currentLabel
+                return profile
+            }
+        } else {
+            profiles = []
+        }
+        await manager.setPronunciationCustomizationEnabled(!profiles.isEmpty)
+        do {
+            let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            let features = await manager.consumePronunciationEncoderFeatures()
+            await manager.setPronunciationCustomizationEnabled(false)
+            guard let features, !profiles.isEmpty else {
+                return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+            }
+            let startedAt = Date().timeIntervalSince1970
+            let corrected = self.applyPronunciationMatches(result: result, features: features, profiles: profiles)
+            let elapsedMs = Int(((Date().timeIntervalSince1970 - startedAt) * 1000).rounded())
+            DebugLogger.shared.info(
+                "PRONUNCIATION_MATCH profiles=\(profiles.count) elapsedMs=\(elapsedMs) changed=\(corrected != result.text)",
+                source: "PronunciationMatching"
+            )
+            return ASRTranscriptionResult(text: corrected, confidence: result.confidence)
+        } catch {
+            _ = await manager.consumePronunciationEncoderFeatures()
+            await manager.setPronunciationCustomizationEnabled(false)
+            throw error
+        }
+    }
+
+    private func makeEnrollment(
+        result: ASRResult,
+        features: EncoderFeatureSequence?
+    ) -> PronunciationEnrollmentCapture? {
+        guard let features,
+              let timings = result.tokenTimings,
+              let first = timings.first,
+              let last = timings.last
+        else { return nil }
+        let start = max(0, Int(floor(first.startTime / features.frameDuration)))
+        let end = min(features.frameCount, Int(ceil(last.endTime / features.frameDuration)))
+        guard start < end,
+              let embedding = PronunciationEmbeddingMatcher.embedding(from: features, frameRange: start..<end)
+        else { return nil }
+        return PronunciationEnrollmentCapture(
+            values: embedding.values,
+            sourceFrameCount: embedding.sourceFrameCount,
+            modelKey: self.pronunciationModelKey
+        )
+    }
+
+    private func applyPronunciationMatches(
+        result: ASRResult,
+        features: EncoderFeatureSequence,
+        profiles: [PronunciationDictionaryProfile]
+    ) -> String {
+        guard let timings = result.tokenTimings else { return result.text }
+        let words = WordAudioChunkExtractor.words(from: timings)
+        guard !words.isEmpty else { return result.text }
+
+        let usableProfiles = profiles.compactMap { profile -> (PronunciationDictionaryProfile, PronunciationEmbedding)? in
+            let embeddings = profile.enrollments.map {
+                PronunciationEmbedding(values: $0.values, sourceFrameCount: $0.sourceFrameCount)
+            }
+            guard profile.hiddenSize == features.hiddenSize,
+                  let prototype = PronunciationEmbeddingMatcher.prototype(from: embeddings)
+            else { return nil }
+            return (profile, prototype)
+        }
+        let matches = PronunciationEmbeddingMatcher.bestMatches(
+            prototypes: usableProfiles.map { $0.1 },
+            in: features
+        )
+
+        struct Candidate {
+            let label: String
+            let score: Float
+            let wordIndices: [Int]
+        }
+        var candidates: [Candidate] = []
+        for (index, match) in matches.enumerated() {
+            guard let match, match.score >= PronunciationCustomizationDefaults.acceptanceThreshold else { continue }
+            let startTime = Double(match.frameRange.lowerBound) * features.frameDuration
+            let endTime = Double(match.frameRange.upperBound) * features.frameDuration
+            let indices = WordAudioChunkExtractor.substantiallyOverlappingWordIndices(
+                in: words,
+                startTime: startTime,
+                endTime: endTime
+            )
+            guard !indices.isEmpty else { continue }
+            candidates.append(Candidate(label: usableProfiles[index].0.label, score: match.score, wordIndices: indices))
+        }
+
+        var claimed = Set<Int>()
+        var accepted: [Candidate] = []
+        for candidate in candidates.sorted(by: { $0.score > $1.score }) {
+            guard candidate.wordIndices.allSatisfy({ !claimed.contains($0) }) else { continue }
+            accepted.append(candidate)
+            claimed.formUnion(candidate.wordIndices)
+            DebugLogger.shared.info(
+                "PRONUNCIATION_HIT score=\(String(format: "%.3f", candidate.score)) words=\(candidate.wordIndices)",
+                source: "PronunciationMatching"
+            )
+        }
+        guard !accepted.isEmpty else { return result.text }
+
+        let replacements = accepted.compactMap { candidate -> PronunciationTextReplacement? in
+            guard let first = candidate.wordIndices.first, let last = candidate.wordIndices.last else { return nil }
+            return PronunciationTextReplacement(wordRange: first...last, label: candidate.label)
+        }
+        return Self.applyingPronunciationReplacements(
+            to: result.text,
+            wordTexts: words.map(\.text),
+            replacements: replacements
+        )
+    }
+
+    static func applyingPronunciationReplacements(
+        to text: String,
+        wordTexts: [String],
+        replacements: [PronunciationTextReplacement]
+    ) -> String {
+        let source = text as NSString
+        var searchLocation = 0
+        var ranges: [NSRange] = []
+        let trimSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+
+        for wordText in wordTexts {
+            let searchableWord = wordText.trimmingCharacters(in: trimSet)
+            guard !searchableWord.isEmpty, searchLocation <= source.length else { return text }
+            let searchRange = NSRange(location: searchLocation, length: source.length - searchLocation)
+            let range = source.range(of: searchableWord, options: .caseInsensitive, range: searchRange)
+            guard range.location != NSNotFound else { return text }
+            ranges.append(range)
+            searchLocation = NSMaxRange(range)
+        }
+
+        let edits = replacements.compactMap { replacement -> (NSRange, String)? in
+            guard ranges.indices.contains(replacement.wordRange.lowerBound),
+                  ranges.indices.contains(replacement.wordRange.upperBound)
+            else { return nil }
+            let start = ranges[replacement.wordRange.lowerBound].location
+            let end = NSMaxRange(ranges[replacement.wordRange.upperBound])
+            return (NSRange(location: start, length: end - start), replacement.label)
+        }.sorted { $0.0.location > $1.0.location }
+
+        let output = NSMutableString(string: text)
+        for (range, label) in edits {
+            output.replaceCharacters(in: range, with: label)
+        }
+        return output as String
     }
 
     private func logFinalBenchmark(
